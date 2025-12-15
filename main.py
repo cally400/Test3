@@ -137,6 +137,6 @@ def handle_deposit(call):
     # هنا يمكنك إضافة منطق الإيداع
     bot.send_message(call.message.chat.id, "⏳ جاري تحضير طلب الإيداع...")
 
-if __name__ == "__main__":
-    print("جارِ تشغيل البوت...")
-    bot.polling()
+#if __name__ == "__main__":
+   # print("جارِ تشغيل البوت...")
+   # bot.polling()
