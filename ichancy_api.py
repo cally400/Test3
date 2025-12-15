@@ -32,8 +32,8 @@ class IChancyAPI:
         self.logger = logging.getLogger(__name__)
 
     def _setup_paths(self):
-    """تهيئة مسارات الملفات والمجلدات"""
-    # استخدم /tmp على Railway (مساحة مؤقتة)
+        """تهيئة مسارات الملفات والمجلدات"""
+        # استخدم /tmp على Railway (مساحة مؤقتة)
         self.DATA_DIR = Path('/tmp/ichancy_data')
         self.DATA_DIR.mkdir(exist_ok=True)
         self.COOKIE_FILE = self.DATA_DIR / 'cookies.pkl'
