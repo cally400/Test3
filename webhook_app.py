@@ -1,23 +1,30 @@
 from flask import Flask, request, jsonify
-import telebot
+import telebot  # هذا سيستورد pyTelegramBotAPI تلقائياً
 import os
-from main import bot, user_data  # استيراد الكائنات من main.py
+from main import bot, user_data
 from threading import Thread
 
 app = Flask(__name__)
 
-# الحصول التوكن من متغيرات البيئة
+# الحصول على التوكن من متغيرات البيئة
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("TELEGRAM_BOT_TOKEN غير موجود في متغيرات البيئة!")
+
 bot.token = TOKEN
 
-# تعيين ويب هوك
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+# إعداد ويب هوك
+WEBHOOK_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
 if WEBHOOK_URL:
     bot.remove_webhook()
-    bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
+    # Railway يعطي دومين عام، يمكننا استخدامه للويب هوك
+    bot.set_webhook(url=f"https://{WEBHOOK_URL}/webhook/{TOKEN}")
 
-@app.route(f'/{TOKEN}', methods=['POST'])
-def telegram_webhook():
+@app.route(f'/webhook/<token>', methods=['POST'])
+def telegram_webhook(token):
+    if token != TOKEN:
+        return 'Unauthorized', 401
+    
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
@@ -33,7 +40,7 @@ def process_update(update):
 
 @app.route('/')
 def index():
-    return "✅ Telegram Bot is Running!"
+    return "✅ Telegram Bot is Running on Railway!"
 
 @app.route('/health')
 def health_check():
