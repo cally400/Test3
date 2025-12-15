@@ -34,10 +34,10 @@ class IChancyAPI:
     def _setup_paths(self):
     """تهيئة مسارات الملفات والمجلدات"""
     # استخدم /tmp على Railway (مساحة مؤقتة)
-    self.DATA_DIR = Path('/tmp/ichancy_data')
-    self.DATA_DIR.mkdir(exist_ok=True)
-    self.COOKIE_FILE = self.DATA_DIR / 'cookies.pkl'
-    self.CAPTCHA_LOG_FILE = self.DATA_DIR / 'captcha_log.txt'
+        self.DATA_DIR = Path('/tmp/ichancy_data')
+        self.DATA_DIR.mkdir(exist_ok=True)
+        self.COOKIE_FILE = self.DATA_DIR / 'cookies.pkl'
+        self.CAPTCHA_LOG_FILE = self.DATA_DIR / 'captcha_log.txt'
 
         # إنشاء ملفات إذا لم تكن موجودة
         if not self.COOKIE_FILE.exists():
