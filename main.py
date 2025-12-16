@@ -137,11 +137,18 @@ def handle_my_account(call):
 def handle_withdraw(call):
     # هنا يمكنك إضافة منطق السحب
     bot.send_message(call.message.chat.id, "⏳ جاري تحضير طلب السحب...")
-
 @bot.callback_query_handler(func=lambda call: call.data == "deposit")
 def handle_deposit(call):
-    # هنا يمكنك إضافة منطق الإيداع
-    bot.send_message(call.message.chat.id, "⏳ جاري تحضير طلب الإيداع...")
+    bot.answer_callback_query(call.id)
+
+    user = get_user(call.from_user.id)
+    if not user:
+        bot.send_message(call.message.chat.id, "❌ لا يوجد حساب مرتبط.")
+        return
+
+    msg = bot.send_message(call.message.chat.id, "💰 أرسل مبلغ الإيداع:")
+    bot.register_next_step_handler(msg, process_deposit_amount)
+
 
 # if __name__ == "__main__":
 #    print("جارِ تشغيل البوت...")
