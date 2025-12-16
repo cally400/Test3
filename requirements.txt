@@ -5,4 +5,4 @@ gunicorn==21.2.0
 python-dotenv==1.0.0
 requests==2.31.0
 pickle-mixin==1.0.2
-pymongo==4.6.1
+pymongo==8.0
