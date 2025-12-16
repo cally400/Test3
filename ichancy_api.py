@@ -325,27 +325,35 @@ class IChancyAPI:
 
     @with_retry
     def deposit_to_player(self, player_id: str, amount: float) -> Tuple[int, dict]:
-        """إيداع رصيد للاعب"""
-        payload = {
-            "amount": amount,
-            "comment": "Deposit from API",
-            "playerId": player_id,
-            "currencyCode": "NSP",
-            "currency": "NSP",
-            "moneyStatus": 5
-        }
+    """إيداع رصيد للاعب مع التسجيل"""
+    self.logger.info(f"🚀 بدء إيداع: {amount} NSP للاعب {player_id}")
+    
+    payload = {
+        "amount": amount,
+        "comment": f"Deposit from Telegram Bot - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "playerId": player_id,
+        "currencyCode": "NSP",
+        "currency": "NSP",
+        "moneyStatus": 5
+    }
 
-        resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS['deposit'],
-            json=payload,
-            headers=self._get_headers()
-        )
+    resp = self.scraper.post(
+        self.ORIGIN + self.ENDPOINTS['deposit'],
+        json=payload,
+        headers=self._get_headers()
+    )
 
-        try:
-            data = resp.json()
-            return resp.status_code, data
-        except Exception:
-            return resp.status_code, {}
+    try:
+        data = resp.json()
+        if resp.status_code == 200:
+            self.logger.info(f"✅ إيداع ناجح: {amount} NSP للاعب {player_id}")
+        else:
+            self.logger.error(f"❌ فشل الإيداع: {resp.status_code} - {data}")
+        return resp.status_code, data
+    except Exception as e:
+        self.logger.error(f"❌ خطأ في الإيداع: {e}")
+        return resp.status_code, {}
+
 
     @with_retry
     def withdraw_from_player(self, player_id: str, amount: float) -> Tuple[int, dict]:
