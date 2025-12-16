@@ -1,11 +1,9 @@
-
 from ichancy_api import IChancyAPI
 import telebot
 from telebot import types
 import os
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from db import create_user, get_user, change_balance, log_transaction
-
 
 # تهيئة API
 api = IChancyAPI()
@@ -114,13 +112,11 @@ def process_password_step(message):
             """
             bot.send_message(message.chat.id, account_info)
 
-        if status == 200:
             create_user(
                 telegram_id=user_id,
                 username=user_data[user_id]['username'],
                 player_id=player_id
             )
-    
 
             # مسح البيانات المؤقتة
             del user_data[user_id]
@@ -147,6 +143,7 @@ def handle_deposit(call):
     # هنا يمكنك إضافة منطق الإيداع
     bot.send_message(call.message.chat.id, "⏳ جاري تحضير طلب الإيداع...")
 
-#if __name__ == "__main__":
-   # print("جارِ تشغيل البوت...")
-   # bot.polling()
+# if __name__ == "__main__":
+#    print("جارِ تشغيل البوت...")
+#    bot.polling()
+
