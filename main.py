@@ -148,7 +148,42 @@ def handle_deposit(call):
 
     msg = bot.send_message(call.message.chat.id, "💰 أرسل مبلغ الإيداع:")
     bot.register_next_step_handler(msg, process_deposit_amount)
+def process_deposit_amount(message):
+    try:
+        telegram_id = message.from_user.id
+        amount = float(message.text)
 
+        if amount <= 0:
+            raise ValueError
+
+        user = get_user(telegram_id)
+        if not user:
+            bot.send_message(message.chat.id, "❌ الحساب غير موجود.")
+            return
+
+        # 1️⃣ تحقق من الرصيد المحلي
+        if user["balance"] < amount:
+            bot.send_message(message.chat.id, "❌ رصيدك غير كافٍ.")
+            return
+
+        # 2️⃣ خصم محلي (مصدر الحقيقة)
+        change_balance(telegram_id, -amount)
+
+        # 3️⃣ تعبئة فعلية في iChancy
+        status, _ = api.deposit_to_player(user["player_id"], amount)
+
+        if status == 200:
+            log_transaction(telegram_id, user["player_id"], amount, "deposit", "success")
+            bot.send_message(message.chat.id, f"✅ تم تعبئة {amount} NSP بنجاح.")
+        else:
+            # 4️⃣ Rollback
+            change_balance(telegram_id, amount)
+            log_transaction(telegram_id, user["player_id"], amount, "deposit", "failed")
+            bot.send_message(message.chat.id, "❌ فشل الإيداع وتمت إعادة الرصيد.")
+
+    except Exception:
+        bot.send_message(message.chat.id, "❌ مبلغ غير صالح.")
+        
 
 # if __name__ == "__main__":
 #    print("جارِ تشغيل البوت...")
