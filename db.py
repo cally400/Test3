@@ -1,23 +1,32 @@
-
 from pymongo import MongoClient
 from datetime import datetime
 import os
 from bson.objectid import ObjectId
 
-client = MongoClient(os.getenv("MONGODB_URI"))
+# الاتصال بقاعدة البيانات
+MONGODB_URI = os.getenv("MONGODB_URI")
+if not MONGODB_URI:
+    raise ValueError("🔴 MONGODB_URI غير موجود في متغيرات البيئة!")
+
+client = MongoClient(MONGODB_URI)
 db = client["ichancy_bot"]
 
+# مجموعات البيانات
 users = db.users
 transactions = db.transactions
 referrals = db.referrals
 
-# إنشاء الفهارس للاستعلام السريع
+# إنشاء الفهارس لتحسين الأداء
 users.create_index("telegram_id", unique=True)
 users.create_index("player_id", unique=True)
 transactions.create_index("telegram_id")
 transactions.create_index("created_at")
 referrals.create_index("referrer_id")
 referrals.create_index("referred_id", unique=True)
+
+# ============================
+# الدوال الأساسية للمستخدمين
+# ============================
 
 def get_user(telegram_id):
     """الحصول على بيانات المستخدم"""
@@ -34,7 +43,7 @@ def create_user(telegram_id, username, first_name, last_name):
         "referral_balance": 0.0,
         "total_earned": 0.0,
         "total_withdrawn": 0.0,
-        "referral_link": f"https://t.me/{(os.getenv('BOT_USERNAME', ''))}?start={telegram_id}",
+        "referral_link": f"https://t.me/{os.getenv('BOT_USERNAME', '')}?start={telegram_id}",
         "referrals_count": 0,
         "active_referrals_count": 0,
         "player_id": None,
@@ -52,7 +61,7 @@ def create_user(telegram_id, username, first_name, last_name):
         users.insert_one(user_data)
         return True
     except Exception as e:
-        print(f"خطأ في إنشاء المستخدم: {e}")
+        print(f"❌ خطأ في إنشاء المستخدم: {e}")
         return False
 
 def update_user(telegram_id, update_data):
@@ -116,6 +125,10 @@ def update_balance(telegram_id, amount, is_withdrawal=False):
         {"$set": update_data}
     )
 
+# ============================
+# إدارة الإحالات
+# ============================
+
 def add_referral(referrer_id, referred_id):
     """إضافة إحالة جديدة"""
     referral_data = {
@@ -129,76 +142,61 @@ def add_referral(referrer_id, referred_id):
     }
     
     try:
-        # إضافة الإحالة
         referrals.insert_one(referral_data)
         
-        # تحديث عدد إحالات المُحيل
+        # تحديث عدد إحالات المحيل
         users.update_one(
             {"telegram_id": referrer_id},
-            {
-                "$inc": {"referrals_count": 1},
-                "$set": {"updated_at": datetime.utcnow()}
-            }
+            {"$inc": {"referrals_count": 1}, "$set": {"updated_at": datetime.utcnow()}}
         )
-        
         return True
     except Exception as e:
-        print(f"خطأ في إضافة الإحالة: {e}")
+        print(f"❌ خطأ في إضافة الإحالة: {e}")
         return False
 
 def activate_referral(referred_id):
-    """تفعيل الإحالة (عند قيام المُحال بإيداع أول مرة)"""
+    """تفعيل الإحالة بعد أول إيداع"""
     referral = referrals.find_one({"referred_id": referred_id})
     if not referral:
         return False
     
-    # تحديث الإحالة كمفعلة
+    # تفعيل الإحالة
     referrals.update_one(
         {"referred_id": referred_id},
-        {
-            "$set": {
-                "is_active": True,
-                "has_deposited": True,
-                "updated_at": datetime.utcnow()
-            }
-        }
+        {"$set": {"is_active": True, "has_deposited": True, "updated_at": datetime.utcnow()}}
     )
     
-    # تحديث عدد الإحالات النشطة للمُحيل
+    # زيادة الإحالات النشطة للمحيل
     users.update_one(
         {"telegram_id": referral["referrer_id"]},
-        {
-            "$inc": {"active_referrals_count": 1},
-            "$set": {"updated_at": datetime.utcnow()}
-        }
+        {"$inc": {"active_referrals_count": 1}, "$set": {"updated_at": datetime.utcnow()}}
     )
     
-    # إضافة مكافأة للمُحيل
+    # إضافة مكافأة
     reward_amount = float(os.getenv("REFERRAL_REWARD", "5.0"))
     users.update_one(
         {"telegram_id": referral["referrer_id"]},
-        {
-            "$inc": {"referral_balance": reward_amount},
-            "$set": {"updated_at": datetime.utcnow()}
-        }
+        {"$inc": {"referral_balance": reward_amount}, "$set": {"updated_at": datetime.utcnow()}}
     )
     
     # تحديث مكافأة الإحالة
     referrals.update_one(
         {"referred_id": referred_id},
-        {
-            "$set": {"referral_reward": reward_amount}
-        }
+        {"$set": {"referral_reward": reward_amount}}
     )
     
     return True
+
+# ============================
+# إدارة المعاملات
+# ============================
 
 def log_transaction(telegram_id, player_id, amount, ttype, status="pending"):
     """تسجيل حركة مالية"""
     transaction_data = {
         "telegram_id": telegram_id,
         "player_id": player_id,
-        "type": ttype,  # deposit, withdrawal, referral, etc.
+        "type": ttype,
         "amount": amount,
         "status": status,
         "created_at": datetime.utcnow()
@@ -207,7 +205,7 @@ def log_transaction(telegram_id, player_id, amount, ttype, status="pending"):
     return transactions.insert_one(transaction_data)
 
 def get_user_transactions(telegram_id, limit=10, transaction_type=None):
-    """الحصول على سجل حركات المستخدم"""
+    """سجل معاملات المستخدم"""
     query = {"telegram_id": telegram_id}
     if transaction_type:
         query["type"] = transaction_type
@@ -215,11 +213,11 @@ def get_user_transactions(telegram_id, limit=10, transaction_type=None):
     return list(transactions.find(query).sort("created_at", -1).limit(limit))
 
 def get_user_referrals(telegram_id):
-    """الحصول على إحالات المستخدم"""
+    """إحالات المستخدم"""
     return list(referrals.find({"referrer_id": telegram_id}))
 
 def get_user_stats(telegram_id):
-    """الحصول على إحصائيات المستخدم"""
+    """إحصائيات المستخدم الكامل"""
     user = get_user(telegram_id)
     if not user:
         return None
@@ -238,3 +236,4 @@ def get_user_stats(telegram_id):
             "total_transactions": len(transactions_list)
         }
     }
+
