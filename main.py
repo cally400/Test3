@@ -114,12 +114,12 @@ def process_password_step(message):
             """
             bot.send_message(message.chat.id, account_info)
 
-            if status == 200:
-    create_user(
-        telegram_id=user_id,
-        username=user_data[user_id]['username'],
-        player_id=player_id
-    )
+        if status == 200:
+            create_user(
+                telegram_id=user_id,
+                username=user_data[user_id]['username'],
+                player_id=player_id
+            )
     
 
             # مسح البيانات المؤقتة
