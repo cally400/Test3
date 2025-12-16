@@ -3,7 +3,7 @@ import telebot
 from telebot import types
 import os
 import asyncio
-import aiohttp
+#import aiohttp
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import db  # استيراد قاعدة البيانات
 
