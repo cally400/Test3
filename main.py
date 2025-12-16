@@ -4,6 +4,8 @@ import telebot
 from telebot import types
 import os
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from db import create_user, get_user, change_balance, log_transaction
+
 
 # تهيئة API
 api = IChancyAPI()
