@@ -1,9 +1,10 @@
+#main.py
+
 from ichancy_api import IChancyAPI
 import telebot
 from telebot import types
 import os
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from db import create_user, get_user, change_balance, log_transaction
 
 # تهيئة API
 api = IChancyAPI()
@@ -57,7 +58,8 @@ def process_username_step(message):
             raise ValueError("يجب أن يكون اسم المستخدم بالإنجليزية وأن لا يقل عن 4 أحرف")
 
         # التحقق من عدم تكرار اسم المستخدم
-        
+        if api.check_player_exists(username):
+            raise ValueError("اسم المستخدم محجوز، الرجاء اختيار اسم آخر")
 
         # حفظ اسم المستخدم مؤقتاً
         if user_id not in user_data:
@@ -111,12 +113,6 @@ def process_password_step(message):
             """
             bot.send_message(message.chat.id, account_info)
 
-            create_user(
-                telegram_id=user_id,
-                username=user_data[user_id]['username'],
-                player_id=player_id
-            )
-
             # مسح البيانات المؤقتة
             del user_data[user_id]
         else:
@@ -129,61 +125,19 @@ def process_password_step(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "my_account")
 def handle_my_account(call):
+    # هنا يمكنك إضافة منطق عرض حساب المستخدم
     bot.send_message(call.message.chat.id, "⏳ جاري جلب معلومات الحساب...")
 
 @bot.callback_query_handler(func=lambda call: call.data == "withdraw")
 def handle_withdraw(call):
+    # هنا يمكنك إضافة منطق السحب
     bot.send_message(call.message.chat.id, "⏳ جاري تحضير طلب السحب...")
 
 @bot.callback_query_handler(func=lambda call: call.data == "deposit")
 def handle_deposit(call):
-    bot.answer_callback_query(call.id)
+    # هنا يمكنك إضافة منطق الإيداع
+    bot.send_message(call.message.chat.id, "⏳ جاري تحضير طلب الإيداع...")
 
-    user = get_user(call.from_user.id)
-    if not user:
-        bot.send_message(call.message.chat.id, "❌ لا يوجد حساب مرتبط.")
-        return
-
-    msg = bot.send_message(call.message.chat.id, "💰 أرسل مبلغ الإيداع:")
-    bot.register_next_step_handler(msg, process_deposit_amount)
-
-def process_deposit_amount(message):
-    try:
-        telegram_id = message.from_user.id
-        amount = float(message.text)
-
-        if amount <= 0:
-            raise ValueError("المبلغ يجب أن يكون أكبر من صفر.")
-
-        user = get_user(telegram_id)
-        if not user:
-            bot.send_message(message.chat.id, "❌ الحساب غير موجود.")
-            return
-
-        # تحقق من الرصيد المحلي
-        if user["balance"] < amount:
-            bot.send_message(message.chat.id, "❌ رصيدك غير كافٍ.")
-            return
-
-        # خصم محلي
-        change_balance(telegram_id, -amount)
-
-        # تعبئة فعلية في iChancy
-        status, _ = api.deposit_to_player(user["player_id"], amount)
-
-        if status == 200:
-            log_transaction(telegram_id, user["player_id"], amount, "deposit", "success")
-            bot.send_message(message.chat.id, f"✅ تم تعبئة {amount} NSP بنجاح.")
-        else:
-            # Rollback
-            change_balance(telegram_id, amount)
-            log_transaction(telegram_id, user["player_id"], amount, "deposit", "failed")
-            bot.send_message(message.chat.id, "❌ فشل الإيداع وتمت إعادة الرصيد.")
-
-    except Exception:
-        bot.send_message(message.chat.id, "❌ مبلغ غير صالح.")
-
-# if __name__ == "__main__":
-#    print("جارِ تشغيل البوت...")
-#    bot.polling()
-
+#if __name__ == "__main__":
+   # print("جارِ تشغيل البوت...")
+   # bot.polling()
