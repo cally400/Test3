@@ -57,8 +57,7 @@ def process_username_step(message):
             raise ValueError("يجب أن يكون اسم المستخدم بالإنجليزية وأن لا يقل عن 4 أحرف")
 
         # التحقق من عدم تكرار اسم المستخدم
-        if api.check_player_exists(username):
-            raise ValueError("اسم المستخدم محجوز، الرجاء اختيار اسم آخر")
+        
 
         # حفظ اسم المستخدم مؤقتاً
         if user_id not in user_data:
