@@ -4,19 +4,7 @@ import os
 from main import bot, user_data
 from threading import Thread
 
-# أضف في الأعلى
-from flask import session
-import secrets
-
 app = Flask(__name__)
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', secrets.token_hex(16))
-
-# في دالة telegram_webhook، استخدم session بدلاً من user_data العالمي
-@app.route(f'/webhook/<token>', methods=['POST'])
-def telegram_webhook(token):
-    if token != TOKEN:
-        return 'Unauthorized', 401
-    
 
 # الحصول على التوكن من متغيرات البيئة
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
