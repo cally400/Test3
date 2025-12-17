@@ -194,3 +194,65 @@ def show_main_menu(message):
         parse_mode="Markdown"
     )
 
+@bot.callback_query_handler(func=lambda c: c.data == "ichancy")
+def handle_ichancy(call):
+    user = db.get_user(call.from_user.id)
+
+    if not user:
+        bot.answer_callback_query(call.id, "❌ المستخدم غير موجود")
+        return
+
+    has_account = all([
+        user.get("player_id"),
+        user.get("player_email"),
+        user.get("player_username"),
+        user.get("player_password")
+    ])
+
+    keyboard = InlineKeyboardMarkup(row_width=1)
+
+    if has_account:
+        keyboard.add(
+            InlineKeyboardButton("💰 تعبئة رصيد في الموقع", callback_data="ichancy_deposit"),
+            InlineKeyboardButton("💸 سحب رصيد من الموقع", callback_data="ichancy_withdraw")
+        )
+        text = (
+            "🎮 **I Chancy**\n\n"
+            "✅ تم العثور على حسابك في الموقع\n\n"
+            "اختر العملية المطلوبة:"
+        )
+    else:
+        keyboard.add(
+            InlineKeyboardButton("➕ إنشاء حساب iChancy", callback_data="ichancy_create")
+        )
+        text = (
+            "🎮 **I Chancy**\n\n"
+            "❌ لا يوجد لديك حساب في الموقع\n\n"
+            "اضغط على إنشاء حساب للمتابعة:"
+        )
+
+    keyboard.add(
+        InlineKeyboardButton("🔙 رجوع", callback_data="back_main")
+    )
+
+    bot.edit_message_text(
+        text=text,
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+    bot.answer_callback_query(call.id)
+    
+@bot.callback_query_handler(func=lambda c: c.data == "back_main")
+def handle_back_main(call):
+    bot.edit_message_text(
+        "🏠 **القائمة الرئيسية**",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=build_main_menu(),
+        parse_mode="Markdown"
+    )
+    bot.answer_callback_query(call.id)
+
