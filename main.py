@@ -35,6 +35,64 @@ def check_channel_membership(chat_id, user_id):
         return False
 
 # =========================
+# القائمة الرئيسية (حسب الطلب)
+# =========================
+def build_main_menu():
+    kb = InlineKeyboardMarkup(row_width=2)
+    
+    # I chancy - زر واحد
+    kb.add(InlineKeyboardButton("🎮 I Chancy", callback_data="ichancy"))
+    
+    # سحب رصيد / شحن رصيد - زرين بجانب بعض
+    kb.row(
+        InlineKeyboardButton("💸 سحب رصيد", callback_data="withdraw"),
+        InlineKeyboardButton("💰 شحن رصيد", callback_data="deposit")
+    )
+    
+    # نظام الإحالات - زر واحد
+    kb.add(InlineKeyboardButton("👥 نظام الإحالات", callback_data="referrals"))
+    
+    # كود هدية / اهداء رصيد - زرين
+    kb.row(
+        InlineKeyboardButton("🎁 كود هدية", callback_data="gift_code"),
+        InlineKeyboardButton("💝 اهداء رصيد", callback_data="gift_balance")
+    )
+    
+    # تواصل معنا / رسالة للادمن - زرين
+    kb.row(
+        InlineKeyboardButton("📞 تواصل معنا", callback_data="contact"),
+        InlineKeyboardButton("✉️ رسالة للادمن", callback_data="admin_msg")
+    )
+    
+    # الشروحات / السجل - زرين
+    kb.row(
+        InlineKeyboardButton("📚 الشروحات", callback_data="tutorials"),
+        InlineKeyboardButton("📜 السجل", callback_data="transactions")
+    )
+    
+    # ichancy apk / Vpn لتشغيل كافة اقسام الموقع - زرين
+    kb.row(
+        InlineKeyboardButton("📱 IChancy APK", callback_data="apk"),
+        InlineKeyboardButton("🛡 VPN", callback_data="vpn")
+    )
+    
+    # الشروط والاحكام - زر واحد
+    kb.add(InlineKeyboardButton("📄 الشروط والاحكام", callback_data="terms"))
+    
+    # الجاكبوت - زر واحد
+    kb.add(InlineKeyboardButton("🎰 الجاكبوت", callback_data="jackpot"))
+    
+    return kb
+
+def show_main_menu(message):
+    bot.send_message(
+        message.chat.id,
+        "🏠 **القائمة الرئيسية**",
+        reply_markup=build_main_menu(),
+        parse_mode="Markdown"
+    )
+
+# =========================
 # /start
 # =========================
 @bot.message_handler(commands=["start"])
@@ -166,34 +224,8 @@ def handle_reject_terms(call):
     bot.send_message(call.message.chat.id, "❌ لا يمكن استخدام البوت بدون قبول الشروط")
 
 # =========================
-# القائمة الرئيسية (حسب طلبك)
+# معالجة I Chancy
 # =========================
-def show_main_menu(message):
-    kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        InlineKeyboardButton("🎮 I Chancy", callback_data="ichancy"),
-        InlineKeyboardButton("💸 سحب رصيد", callback_data="withdraw"),
-        InlineKeyboardButton("💰 شحن رصيد", callback_data="deposit"),
-        InlineKeyboardButton("👥 نظام الإحالات", callback_data="referrals"),
-        InlineKeyboardButton("🎁 كود هدية", callback_data="gift_code"),
-        InlineKeyboardButton("💝 إهداء رصيد", callback_data="gift_balance"),
-        InlineKeyboardButton("📞 تواصل معنا", callback_data="contact"),
-        InlineKeyboardButton("✉️ رسالة للادمن", callback_data="admin_msg"),
-        InlineKeyboardButton("📚 الشروحات", callback_data="tutorials"),
-        InlineKeyboardButton("📜 السجل", callback_data="transactions"),
-        InlineKeyboardButton("📱 IChancy APK", callback_data="apk"),
-        InlineKeyboardButton("🛡 VPN", callback_data="vpn"),
-        InlineKeyboardButton("📄 الشروط", callback_data="terms"),
-        InlineKeyboardButton("🎰 الجاكبوت", callback_data="jackpot")
-    )
-
-    bot.send_message(
-        message.chat.id,
-        "🏠 **القائمة الرئيسية**",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
-
 @bot.callback_query_handler(func=lambda c: c.data == "ichancy")
 def handle_ichancy(call):
     user = db.get_user(call.from_user.id)
@@ -245,6 +277,9 @@ def handle_ichancy(call):
 
     bot.answer_callback_query(call.id)
     
+# =========================
+# الرجوع للقائمة الرئيسية
+# =========================
 @bot.callback_query_handler(func=lambda c: c.data == "back_main")
 def handle_back_main(call):
     bot.edit_message_text(
@@ -255,4 +290,3 @@ def handle_back_main(call):
         parse_mode="Markdown"
     )
     bot.answer_callback_query(call.id)
-
