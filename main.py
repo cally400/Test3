@@ -1,4 +1,5 @@
 from ichancy_api import IChancyAPI
+import ichancy_create_account as ichancy_create
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os
@@ -290,3 +291,8 @@ def handle_back_main(call):
         parse_mode="Markdown"
     )
     bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda c: c.data == "ichancy_create")
+def handle_ichancy_create(call):
+    ichancy_create.start_create_account(bot, call)
+
