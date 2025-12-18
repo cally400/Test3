@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import telebot
 import os
 from threading import Thread
-from main import bot
+from main import bot  # استيراد البوت فقط
 
 app = Flask(__name__)
 
@@ -40,5 +40,7 @@ def health_check():
     return jsonify({"status": "healthy", "service": "telegram-bot"})
 
 if __name__ == '__main__':
+    # على Railpack نترك Flask هو المسؤول عن تشغيل الخدمة
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
