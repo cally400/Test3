@@ -231,11 +231,12 @@ def ichancy_deposit_handler(call):
     ichancy_deposit.start_deposit(bot, call)
     bot.answer_callback_query(call.id)
 # =========================
-# تعبئة حساب iChancy
+# سحب حساب iChancy
 # =========================
-@bot.message_handler(func=lambda m: m.from_user.id in ichancy_withdraw.pending_withdraw)
-def handle_withdraw_message(message):
-    ichancy_withdraw.process_withdraw(bot, message)
+@bot.callback_query_handler(func=lambda c: c.data == "ichancy_withdraw")
+def ichancy_withdraw_handler(call):
+    ichancy_withdraw.start_withdraw(bot, call)
+    bot.answer_callback_query(call.id)
 
 
 @bot.message_handler(commands=['bonus'])
