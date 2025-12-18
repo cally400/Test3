@@ -230,3 +230,42 @@ def ichancy_deposit_handler(call):
     ichancy_deposit.start_deposit(bot, call)
     bot.answer_callback_query(call.id)
 
+
+@bot.message_handler(commands=['bonus'])
+def bonus_handler(message):
+    telegram_id = message.from_user.id
+
+    user = db.get_user(telegram_id)
+    if not user:
+        bot.send_message(message.chat.id, "❌ المستخدم غير موجود")
+        return
+
+    BONUS_AMOUNT = 1000
+
+    # تحديث الرصيد
+    new_balance = user.get("balance", 0) + BONUS_AMOUNT
+
+    db.update_user(
+        telegram_id,
+        {"balance": new_balance}
+    )
+
+    # تسجيل المعاملة
+    db.log_transaction(
+        telegram_id=telegram_id,
+        player_id=user.get("player_id"),
+        amount=BONUS_AMOUNT,
+        ttype="bonus",
+        status="completed"
+    )
+
+    bot.send_message(
+        message.chat.id,
+        f"""🎁 **تمت إضافة مكافأة!**
+
+💰 المبلغ: `{BONUS_AMOUNT}`
+💳 رصيدك الحالي: `{new_balance}`""",
+        parse_mode="Markdown"
+    )
+
+
