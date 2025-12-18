@@ -1,162 +1,78 @@
+# ichancy_create_account.py
+
+import os
 import random
 import string
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pymongo import MongoClient
 from ichancy_api import IChancyAPI
-import db
 
-# =========================
-# تهيئة API
-# =========================
+# API
 api = IChancyAPI()
 
-# =========================
-# تخزين مؤقت لخطوات الإنشاء
-# =========================
-create_sessions = {}
+# MongoDB
+MONGO_URI = os.getenv("MONGO_URI")
+client = MongoClient(MONGO_URI)
+db = client["ichancy"]
+users_col = db["users"]
 
-# =========================
-# توليد اسم مستخدم متاح
-# =========================
-def make_username_available(base_username):
-    username = f"ZEUS_{base_username}"
-    attempt = 0
 
-    while attempt < 10:
-        try:
-            if not api.check_player_exists(username):
-                return username
-        except Exception:
-            pass
+def _random_suffix(length=3):
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
-        suffix = ''.join(random.choices(string.ascii_letters + string.digits, k=3))
-        username = f"ZEUS_{base_username}_{suffix}"
-        attempt += 1
 
-    return username
+def generate_username(raw_username: str) -> str:
+    """
+    توليد اسم مستخدم متاح على iChancy بصيغة:
+    ZEUS_name أو ZEUS_name_x7a
+    """
+    base = f"ZEUS_{raw_username}"
 
-# =========================
-# بدء إنشاء الحساب
-# =========================
-def start_create_account(bot, call):
-    user_id = call.from_user.id
+    for i in range(6):
+        username = base if i == 0 else f"{base}_{_random_suffix()}"
 
-    # منع التكرار
-    user = db.get_user(user_id)
-    if user and user.get("player_id"):
-        bot.answer_callback_query(call.id, "⚠️ لديك حساب مسبقًا")
-        return
+        status, data, _, _ = api.create_player_with_credentials(
+            username,
+            "TempPassword123!"
+        )
 
-    create_sessions[user_id] = {}
+        # إذا نجح الإنشاء → الاسم متاح
+        if status == 200:
+            return username
 
-    bot.edit_message_text(
-        "📝 **أرسل اسم المستخدم المطلوب**\n"
-        "- إنجليزي فقط\n"
-        "- 4 أحرف على الأقل",
-        call.message.chat.id,
-        call.message.message_id,
-        parse_mode="Markdown"
+        # لو الخطأ ليس متعلقًا بالاسم نوقف المحاولة
+        if "username" not in str(data).lower():
+            break
+
+    raise ValueError("❌ اسم المستخدم غير متاح، جرّب اسمًا آخر")
+
+
+def create_ichancy_account(telegram_id: int, raw_username: str, password: str):
+    """
+    إنشاء حساب iChancy + حفظه في MongoDB
+    """
+    username = generate_username(raw_username)
+
+    status, data, player_id, email = api.create_player_with_credentials(
+        username,
+        password
     )
 
-    bot.register_next_step_handler(call.message, process_username, bot)
+    if status != 200:
+        error_msg = data.get("notification", [{}])[0].get("content", "فشل إنشاء الحساب")
+        raise ValueError(error_msg)
 
-# =========================
-# استقبال اسم المستخدم
-# =========================
-def process_username(message, bot):
-    user_id = message.from_user.id
-    base_username = message.text.strip()
+    users_col.insert_one({
+        "telegram_id": telegram_id,
+        "username": username,
+        "password": password,
+        "email": email,
+        "player_id": player_id
+    })
 
-    if not base_username.isascii() or len(base_username) < 4:
-        msg = bot.send_message(
-            message.chat.id,
-            "❌ اسم المستخدم غير صالح\nأرسل اسمًا إنجليزيًا (4 أحرف على الأقل)"
-        )
-        bot.register_next_step_handler(msg, process_username, bot)
-        return
-
-    final_username = make_username_available(base_username)
-
-    if user_id not in create_sessions:
-        create_sessions[user_id] = {}
-
-    create_sessions[user_id]["username"] = final_username
-
-    bot.send_message(
-        message.chat.id,
-        f"✅ الاسم النهائي: `{final_username}`",
-        parse_mode="Markdown"
-    )
-
-    msg = bot.send_message(
-        message.chat.id,
-        "🔐 **أرسل كلمة المرور**\n(8 أحرف على الأقل)",
-        parse_mode="Markdown"
-    )
-
-    bot.register_next_step_handler(msg, process_password, bot)
-
-# =========================
-# استقبال كلمة المرور
-# =========================
-def process_password(message, bot):
-    user_id = message.from_user.id
-    password = message.text.strip()
-
-    if len(password) < 8:
-        msg = bot.send_message(
-            message.chat.id,
-            "❌ كلمة المرور ضعيفة\nأرسل كلمة مرور من 8 أحرف على الأقل"
-        )
-        bot.register_next_step_handler(msg, process_password, bot)
-        return
-
-    session = create_sessions.get(user_id)
-    if not session or "username" not in session:
-        bot.send_message(message.chat.id, "❌ انتهت الجلسة، أعد المحاولة")
-        create_sessions.pop(user_id, None)
-        return
-
-    session["password"] = password
-
-    bot.send_message(message.chat.id, "⏳ جاري إنشاء الحساب...")
-
-    try:
-        status, data, player_id, email = api.create_player_with_credentials(
-            session["username"],
-            session["password"]
-        )
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ فشل الاتصال بـ iChancy")
-        create_sessions.pop(user_id, None)
-        return
-
-    if status == 200 and player_id:
-        db.update_player_info(
-            telegram_id=user_id,
-            player_id=player_id,
-            player_username=session["username"],
-            player_email=email,
-            player_password=session["password"]
-        )
-
-        bot.send_message(
-            message.chat.id,
-            f"""
-✅ **تم إنشاء حساب iChancy بنجاح**
-━━━━━━━━━━━━━━
-👤 المستخدم: `{session['username']}`
-🔐 كلمة المرور: `{session['password']}`
-📧 الإيميل: `{email}`
-🆔 ID: `{player_id}`
-━━━━━━━━━━━━━━
-""",
-            parse_mode="Markdown"
-        )
-    else:
-        error = "فشل إنشاء الحساب"
-        if isinstance(data, dict):
-            error = data.get("notification", [{}])[0].get("content", error)
-        bot.send_message(message.chat.id, f"❌ {error}")
-
-    create_sessions.pop(user_id, None)
+    return {
+        "username": username,
+        "password": password,
+        "email": email,
+        "player_id": player_id
+    }
 
