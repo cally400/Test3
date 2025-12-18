@@ -1,5 +1,4 @@
-import time
-from worker_functions import keep_session_alive  # استيراد الدالة من worker_functions.py
+from worker_functions import keep_session_alive
 
 if __name__ == '__main__':
     print("🚀 Worker started - Keeping iChancy session alive")
