@@ -3,7 +3,6 @@ from ichancy_api import IChancyAPI
 
 api = IChancyAPI()
 
-# حالات مؤقتة
 pending_deposits = {}
 
 def start_deposit(bot, call):
@@ -13,26 +12,18 @@ def start_deposit(bot, call):
         bot.send_message(call.message.chat.id, "❌ لا يوجد حساب iChancy مرتبط")
         return
 
-    pending_deposits[call.from_user.id] = {
-        "player_id": str(user["player_id"])
-    }
+    pending_deposits[call.from_user.id] = {"player_id": user["player_id"]}
 
-    bot.send_message(
-        call.message.chat.id,
-        "💰 أرسل مبلغ الشحن:"
-    )
-
+    bot.send_message(call.message.chat.id, "💰 أرسل مبلغ الشحن:")
     bot.register_next_step_handler_by_chat_id(
         call.message.chat.id,
         lambda msg: process_amount(bot, msg, call.from_user.id)
     )
 
-
 def process_amount(bot, message, telegram_id):
     if telegram_id not in pending_deposits:
         return
 
-    # تحقق من المبلغ
     try:
         amount = float(message.text.strip())
         if amount <= 0:
@@ -45,80 +36,32 @@ def process_amount(bot, message, telegram_id):
     balance = user.get("balance", 0)
 
     if balance < amount:
-        bot.send_message(
-            message.chat.id,
-            f"❌ رصيدك غير كافٍ\nرصيدك الحالي: {balance}"
-        )
+        bot.send_message(message.chat.id, f"❌ رصيدك غير كافٍ\nرصيدك الحالي: {balance}")
         pending_deposits.pop(telegram_id, None)
         return
 
     player_id = pending_deposits[telegram_id]["player_id"]
 
-    # ========================
-    # 1️⃣ التأكد من تسجيل الدخول
-    # ========================
+    # خصم مبدئي
+    db.update_user(telegram_id, {"balance": balance - amount})
+
+    # شحن iChancy
     try:
-        api.ensure_login()
+        status, data = api.deposit_to_player(player_id, amount)
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ فشل تسجيل الدخول: {str(e)}")
-        pending_deposits.pop(telegram_id, None)
-        return
-
-    # ========================
-    # 2️⃣ خصم مبدئي
-    # ========================
-    db.update_user(
-        telegram_id,
-        {"balance": balance - amount}
-    )
-
-    # ========================
-    # 3️⃣ شحن iChancy
-    # ========================
-    status, data = api.deposit_to_player(player_id, amount)
+        status, data = 500, {"notification":[{"content": str(e)}]}
 
     if status == 200 and data.get("result", False):
-        # نجاح
-        db.log_transaction(
-            telegram_id=telegram_id,
-            player_id=player_id,
-            amount=amount,
-            ttype="ichancy_deposit",
-            status="completed"
-        )
-
-        bot.send_message(
-            message.chat.id,
-            f"✅ تم شحن {amount} بنجاح في حساب iChancy"
-        )
-
+        db.log_transaction(telegram_id=telegram_id, player_id=player_id,
+                           amount=amount, ttype="ichancy_deposit", status="completed")
+        bot.send_message(message.chat.id, f"✅ تم شحن {amount} بنجاح في حساب iChancy")
     else:
-        # ========================
-        # 4️⃣ Rollback (إرجاع الرصيد)
-        # ========================
-        db.update_user(
-            telegram_id,
-            {"balance": balance}
-        )
-
-        error_msg = (
-            data.get("notification", [{}])[0].get("content")
-            if isinstance(data, dict)
-            else "فشل غير معروف"
-        )
-
-        db.log_transaction(
-            telegram_id=telegram_id,
-            player_id=player_id,
-            amount=amount,
-            ttype="ichancy_deposit",
-            status="failed"
-        )
-
-        bot.send_message(
-            message.chat.id,
-            f"❌ فشل الشحن:\n{error_msg}\n\n🔄 تم إعادة الرصيد"
-        )
+        # rollback
+        db.update_user(telegram_id, {"balance": balance})
+        error_msg = data.get("notification", [{}])[0].get("content", "فشل غير معروف")
+        db.log_transaction(telegram_id=telegram_id, player_id=player_id,
+                           amount=amount, ttype="ichancy_deposit", status="failed")
+        bot.send_message(message.chat.id, f"❌ فشل الشحن:\n{error_msg}\n\n🔄 تم إعادة الرصيد")
 
     pending_deposits.pop(telegram_id, None)
 
