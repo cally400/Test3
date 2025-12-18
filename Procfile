@@ -1,1 +1,3 @@
-web: gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --access-logfile - --error-logfile - webhook_app:app
+web: gunicorn --bind 0.0.0.0:$PORT webhook_app:app
+worker: python worker.py
+
