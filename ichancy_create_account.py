@@ -22,18 +22,21 @@ def generate_username(raw_username: str) -> str:
 
 def start_create_account(bot, call):
     bot.send_message(call.message.chat.id, "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط):")
-    bot.register_next_step_handler_by_chat_id(call.message.chat.id, process_username_step, call.from_user.id)
+    bot.register_next_step_handler_by_chat_id(call.message.chat.id, lambda msg: process_username_step(bot, msg, call.from_user.id))
 
-def process_username_step(message, telegram_id):
+def process_username_step(bot, message, telegram_id):
     raw_username = message.text.strip()
     try:
         username = generate_username(raw_username)
         bot.send_message(message.chat.id, f"✅ الاسم متاح: {username}\n🔐 أرسل كلمة السر:")
-        bot.register_next_step_handler_by_chat_id(message.chat.id, process_password_step, telegram_id, username)
+        bot.register_next_step_handler_by_chat_id(
+            message.chat.id, 
+            lambda msg: process_password_step(bot, msg, telegram_id, username)
+        )
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
 
-def process_password_step(message, telegram_id, username):
+def process_password_step(bot, message, telegram_id, username):
     password = message.text.strip()
     try:
         status, data, player_id, email = api.create_player_with_credentials(username, password)
@@ -41,7 +44,9 @@ def process_password_step(message, telegram_id, username):
             error_msg = data.get("notification", [{}])[0].get("content", "فشل إنشاء الحساب")
             raise ValueError(error_msg)
         db.update_player_info(telegram_id, player_id, username, email, password)
-        bot.send_message(message.chat.id, f"✅ تم إنشاء الحساب بنجاح\n👤 المستخدم: {username}\n🔐 كلمة السر: {password}\n📧 الإيميل: {email}\n🆔 معرف اللاعب: {player_id}")
+        bot.send_message(
+            message.chat.id,
+            f"✅ تم إنشاء الحساب بنجاح\n👤 المستخدم: {username}\n🔐 كلمة السر: {password}\n📧 الإيميل: {email}\n🆔 معرف اللاعب: {player_id}"
+        )
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ فشل إنشاء الحساب: {str(e)}")
-
