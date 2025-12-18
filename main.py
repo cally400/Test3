@@ -1,5 +1,6 @@
 from ichancy_api import IChancyAPI
 import ichancy_deposit
+import ichancy_withdraw
 import ichancy_create_account as ichancy_create
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -229,6 +230,12 @@ def handle_ichancy_create(call):
 def ichancy_deposit_handler(call):
     ichancy_deposit.start_deposit(bot, call)
     bot.answer_callback_query(call.id)
+# =========================
+# تعبئة حساب iChancy
+# =========================
+@bot.message_handler(func=lambda m: m.from_user.id in ichancy_withdraw.pending_withdraw)
+def handle_withdraw_message(message):
+    ichancy_withdraw.process_withdraw(bot, message)
 
 
 @bot.message_handler(commands=['bonus'])
