@@ -1,3 +1,33 @@
+import db
+from ichancy_api import IChancyAPI
+
+api = IChancyAPI()
+
+# حالات مؤقتة
+pending_withdraws = {}
+
+def start_withdraw(bot, call):
+    user = db.get_user(call.from_user.id)
+
+    if not user or not user.get("player_id"):
+        bot.send_message(call.message.chat.id, "❌ لا يوجد حساب iChancy مرتبط")
+        return
+
+    pending_withdraws[call.from_user.id] = {
+        "player_id": str(user["player_id"])
+    }
+
+    bot.send_message(
+        call.message.chat.id,
+        "💸 أرسل مبلغ السحب:"
+    )
+
+    bot.register_next_step_handler_by_chat_id(
+        call.message.chat.id,
+        lambda msg: process_withdraw(bot, msg, call.from_user.id)
+    )
+
+
 def process_withdraw(bot, message, telegram_id):
     if telegram_id not in pending_withdraws:
         return
@@ -8,22 +38,23 @@ def process_withdraw(bot, message, telegram_id):
         if amount <= 0:
             raise ValueError
     except:
-        bot.send_message(message.chat.id, "❌ أدخل رقمًا صحيحًا أكبر من 0")
+        bot.send_message(message.chat.id, "❌ أدخل رقمًا صحيحًا")
         return
 
     player_id = pending_withdraws[telegram_id]["player_id"]
 
     # ========================
-    # 0️⃣ تأكد من تسجيل الدخول
+    # 1️⃣ التأكد من تسجيل الدخول
     # ========================
-    login_ok, login_msg = api.ensure_logged_in()
-    if not login_ok:
-        bot.send_message(message.chat.id, f"❌ فشل تسجيل الدخول: {login_msg}")
+    try:
+        api.ensure_login()
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ فشل تسجيل الدخول: {str(e)}")
         pending_withdraws.pop(telegram_id, None)
         return
 
     # ========================
-    # 1️⃣ التحقق من رصيد iChancy
+    # 2️⃣ التحقق من رصيد iChancy
     # ========================
     status, data, balance_in_site = api.get_player_balance(player_id)
     if status != 200:
@@ -40,13 +71,13 @@ def process_withdraw(bot, message, telegram_id):
         return
 
     # ========================
-    # 2️⃣ سحب الرصيد من iChancy
+    # 3️⃣ سحب الرصيد من iChancy
     # ========================
     status, data = api.withdraw_from_player(player_id, amount)
 
     if status == 200 and data.get("result", False):
         # ========================
-        # 3️⃣ إضافة الرصيد إلى DB
+        # 4️⃣ إضافة الرصيد إلى DB
         # ========================
         db.update_balance(telegram_id, amount)
 
@@ -80,7 +111,7 @@ def process_withdraw(bot, message, telegram_id):
 
         bot.send_message(
             message.chat.id,
-            f"❌ فشل السحب:\n{error_msg}\n🔄 لم يتم تعديل رصيدك"
+            f"❌ فشل السحب:\n{error_msg}\n\n🔄 لم يتم تعديل رصيدك"
         )
 
     pending_withdraws.pop(telegram_id, None)
