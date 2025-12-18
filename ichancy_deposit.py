@@ -14,10 +14,13 @@ def start_deposit(bot, call):
         return
 
     pending_deposits[call.from_user.id] = {
-        "player_id": user["player_id"]
+        "player_id": str(user["player_id"])
     }
 
-    bot.send_message(call.message.chat.id, "💰 أرسل مبلغ الشحن:")
+    bot.send_message(
+        call.message.chat.id,
+        "💰 أرسل مبلغ الشحن:"
+    )
 
     bot.register_next_step_handler_by_chat_id(
         call.message.chat.id,
@@ -35,32 +38,39 @@ def process_amount(bot, message, telegram_id):
         if amount <= 0:
             raise ValueError
     except:
-        bot.send_message(message.chat.id, "❌ أدخل رقمًا صحيحًا أكبر من 0")
+        bot.send_message(message.chat.id, "❌ أدخل رقمًا صحيحًا")
         return
 
     user = db.get_user(telegram_id)
     balance = user.get("balance", 0)
 
     if balance < amount:
-        bot.send_message(message.chat.id, f"❌ رصيدك غير كافٍ\nرصيدك الحالي: {balance}")
+        bot.send_message(
+            message.chat.id,
+            f"❌ رصيدك غير كافٍ\nرصيدك الحالي: {balance}"
+        )
         pending_deposits.pop(telegram_id, None)
         return
 
     player_id = pending_deposits[telegram_id]["player_id"]
 
     # ========================
-    # 1️⃣ تأكد من تسجيل الدخول
+    # 1️⃣ التأكد من تسجيل الدخول
     # ========================
-    login_ok, login_msg = api.ensure_logged_in()
-    if not login_ok:
-        bot.send_message(message.chat.id, f"❌ فشل تسجيل الدخول: {login_msg}")
+    try:
+        api.ensure_login()
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ فشل تسجيل الدخول: {str(e)}")
         pending_deposits.pop(telegram_id, None)
         return
 
     # ========================
-    # 2️⃣ خصم مؤقت من الرصيد
+    # 2️⃣ خصم مبدئي
     # ========================
-    db.update_user(telegram_id, {"balance": balance - amount})
+    db.update_user(
+        telegram_id,
+        {"balance": balance - amount}
+    )
 
     # ========================
     # 3️⃣ شحن iChancy
@@ -68,16 +78,47 @@ def process_amount(bot, message, telegram_id):
     status, data = api.deposit_to_player(player_id, amount)
 
     if status == 200 and data.get("result", False):
-        db.log_transaction(telegram_id, player_id, amount, "ichancy_deposit", "completed")
-        bot.send_message(message.chat.id, f"✅ تم شحن {amount} بنجاح في حساب iChancy")
+        # نجاح
+        db.log_transaction(
+            telegram_id=telegram_id,
+            player_id=player_id,
+            amount=amount,
+            ttype="ichancy_deposit",
+            status="completed"
+        )
+
+        bot.send_message(
+            message.chat.id,
+            f"✅ تم شحن {amount} بنجاح في حساب iChancy"
+        )
+
     else:
         # ========================
-        # 4️⃣ Rollback في حالة الفشل
+        # 4️⃣ Rollback (إرجاع الرصيد)
         # ========================
-        db.update_user(telegram_id, {"balance": balance})
-        db.log_transaction(telegram_id, player_id, amount, "ichancy_deposit", "failed")
-        error_msg = data.get("notification", [{}])[0].get("content") if isinstance(data, dict) else "فشل غير معروف"
-        bot.send_message(message.chat.id, f"❌ فشل الشحن:\n{error_msg}\n🔄 تم إعادة الرصيد")
+        db.update_user(
+            telegram_id,
+            {"balance": balance}
+        )
+
+        error_msg = (
+            data.get("notification", [{}])[0].get("content")
+            if isinstance(data, dict)
+            else "فشل غير معروف"
+        )
+
+        db.log_transaction(
+            telegram_id=telegram_id,
+            player_id=player_id,
+            amount=amount,
+            ttype="ichancy_deposit",
+            status="failed"
+        )
+
+        bot.send_message(
+            message.chat.id,
+            f"❌ فشل الشحن:\n{error_msg}\n\n🔄 تم إعادة الرصيد"
+        )
 
     pending_deposits.pop(telegram_id, None)
 
