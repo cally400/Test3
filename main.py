@@ -307,4 +307,3 @@ def delete_user_data(message):
         )
         print("DEL ERROR:", e)
 
-
