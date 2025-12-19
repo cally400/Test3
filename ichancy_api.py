@@ -121,18 +121,49 @@ class IChancyAPI:
                 import time
                 time.sleep(1)
 
+    def check_player_exists(self, username: str):
+        """التحقق من وجود لاعب بالاسم"""
+        try:
+            # جلب إحصائيات اللاعبين
+            payload = {
+                "filter": {
+                    "search": username,
+                    "parentId": self.PARENT_ID
+                }
+            }
+            
+            r = self._make_request(
+                self.ENDPOINTS['statistics'],
+                payload,
+                timeout=15
+            )
+            
+            if r.status_code == 200:
+                data = r.json()
+                # التحقق من وجود اللاعب في النتائج
+                players = data.get('players', [])
+                for player in players:
+                    if player.get('login') == username:
+                        return True
+            return False
+            
+        except Exception as e:
+            send_admin_log("⚠️ Check Player Error", str(e))
+            return False
+
     # ======================
     # إنشاء حساب
     # ======================
-    def create_player_with_credentials(self, login: str, password: str):
+    def create_player_with_credentials(self, username: str, password: str):
+        """إنشاء لاعب - النسخة المعدلة"""
         try:
-            email = f"{login}@agent.nsp"
+            email = f"{username}@agent.nsp"
             payload = {
                 "player": {
                     "email": email,
                     "password": password,
                     "parentId": self.PARENT_ID,
-                    "login": login
+                    "login": username
                 }
             }
 
@@ -145,9 +176,10 @@ class IChancyAPI:
             data = r.json() if r.content else {}
             
             if r.status_code == 200:
+                player_id = data.get('id')
                 send_admin_log(
                     "✅ Create Player",
-                    f"👤 {login}\n📧 {email}\nID: {data.get('id', 'N/A')}"
+                    f"👤 {username}\n📧 {email}\nID: {player_id or 'N/A'}"
                 )
             else:
                 send_admin_log(
@@ -155,11 +187,12 @@ class IChancyAPI:
                     f"Status: {r.status_code}\nResponse: {data}"
                 )
 
-            return r.status_code, data
+            # إرجاع البيانات بتنسيق متوافق مع الكود القديم
+            return r.status_code, data, data.get('id'), email
 
         except Exception as e:
             send_admin_log("❌ API Error", f"create_player\n{str(e)}")
-            return 500, {"error": str(e)}
+            return 500, {"error": str(e)}, None, None
 
     # ======================
     # إيداع
@@ -190,6 +223,58 @@ class IChancyAPI:
             
         except Exception as e:
             send_admin_log("❌ Deposit Error", str(e))
+            return 500, {"error": str(e)}
+
+    # ======================
+    # سحب
+    # ======================
+    def withdraw_from_player(self, player_id: str, amount: float):
+        try:
+            payload = {
+                "playerId": player_id,
+                "amount": amount,
+                "currency": "NSP",
+                "currencyCode": "NSP",
+                "moneyStatus": 5
+            }
+            
+            r = self._make_request(
+                self.ENDPOINTS['withdraw'],
+                payload,
+                timeout=15
+            )
+            
+            data = r.json() if r.content else {}
+            
+            send_admin_log(
+                "💸 Withdraw",
+                f"Player: {player_id}\nAmount: {amount}\nStatus: {r.status_code}"
+            )
+            return r.status_code, data
+            
+        except Exception as e:
+            send_admin_log("❌ Withdraw Error", str(e))
+            return 500, {"error": str(e)}
+
+    # ======================
+    # رصيد
+    # ======================
+    def get_player_balance(self, player_id: str):
+        try:
+            payload = {"playerId": player_id}
+            
+            r = self._make_request(
+                self.ENDPOINTS['balance'],
+                payload,
+                timeout=15
+            )
+            
+            data = r.json() if r.content else {}
+            
+            return r.status_code, data
+            
+        except Exception as e:
+            send_admin_log("❌ Balance Error", str(e))
             return 500, {"error": str(e)}
 
     def logout(self):
