@@ -280,23 +280,19 @@ def delete_user_data(message):
     telegram_id = message.from_user.id
 
     try:
-        # جلب بيانات المستخدم
-        user = db.get_user_by_telegram_id(telegram_id)
+        deleted = db.clear_player_info(telegram_id)
 
-        if not user or not user.get("player_id"):
+        if not deleted:
             bot.send_message(
                 message.chat.id,
-                "ℹ️ لا توجد أي معلومات حساب محفوظة لديك."
+                "ℹ️ لا توجد معلومات حساب محفوظة لديك."
             )
             return
-
-        # حذف بيانات الحساب فقط
-        db.clear_player_info(telegram_id)
 
         bot.send_message(
             message.chat.id,
             "✅ تم حذف معلومات حسابك بنجاح.\n\n"
-            "📌 تم حذف:\n"
+            "🗑️ تم حذف:\n"
             "- اسم المستخدم\n"
             "- كلمة المرور\n"
             "- البريد الإلكتروني\n"
@@ -307,7 +303,7 @@ def delete_user_data(message):
     except Exception as e:
         bot.send_message(
             message.chat.id,
-            "❌ حدث خطأ أثناء حذف البيانات، حاول لاحقًا."
+            "❌ حدث خطأ أثناء حذف البيانات."
         )
         print("DEL ERROR:", e)
 
