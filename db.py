@@ -244,3 +244,17 @@ def get_user_stats(telegram_id):
         }
     }
 
+def clear_player_info(telegram_id):
+    users = load_users()
+
+    uid = str(telegram_id)
+    if uid not in users:
+        return False
+
+    users[uid].pop("player_id", None)
+    users[uid].pop("username", None)
+    users[uid].pop("email", None)
+    users[uid].pop("password", None)
+
+    save_users(users)
+    return True
