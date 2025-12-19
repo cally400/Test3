@@ -1,11 +1,29 @@
-import os
+import cloudscraper
 import random
 import string
-from ichancy_session import IChancySession
-from admin_logger import send_admin_log
+import os
+import logging
+from datetime import datetime, timedelta
+from typing import Tuple, Optional, Dict
+from functools import wraps
+
+class IChancySession:
+    """جلسة مستقلة لكل عملية/مستخدم"""
+    def __init__(self, headers: Dict[str, str]):
+        self.scraper = cloudscraper.create_scraper(
+            browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
+        )
+        self.headers = headers
+        self.login_time = None
+        self.cookies = {}
+
+    def is_valid(self):
+        if not self.login_time:
+            return False
+        return datetime.now() - self.login_time < timedelta(hours=2)
+
 
 class IChancyAPI:
-
     ORIGIN = "https://agents.ichancy.com"
     ENDPOINTS = {
         'signin': "/global/api/User/signIn",
@@ -20,6 +38,8 @@ class IChancyAPI:
         self.USERNAME = os.getenv("AGENT_USERNAME")
         self.PASSWORD = os.getenv("AGENT_PASSWORD")
         self.PARENT_ID = os.getenv("PARENT_ID")
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+        self.logger = logging.getLogger(__name__)
 
     def _headers(self):
         return {
@@ -29,9 +49,6 @@ class IChancyAPI:
             "Referer": self.ORIGIN + "/dashboard"
         }
 
-    def _new_session(self):
-        return IChancySession(self._headers())
-
     def _login(self, session: IChancySession):
         payload = {"username": self.USERNAME, "password": self.PASSWORD}
         r = session.scraper.post(self.ORIGIN + self.ENDPOINTS['signin'], json=payload, headers=session.headers, timeout=15)
@@ -39,80 +56,67 @@ class IChancyAPI:
         if not data.get("result"):
             raise Exception("Login failed")
         session.login_time = datetime.now()
+        session.cookies = dict(session.scraper.cookies)
 
-    def _ensure_login(self, session):
+    def _ensure_login(self, session: IChancySession):
         if not session.is_valid():
             self._login(session)
 
-    # ======================
-    # إنشاء حساب
-    # ======================
-    def create_player_with_credentials(self, login: str, password: str):
-        session = self._new_session()
-        try:
-            self._ensure_login(session)
-            email = f"{login}@agent.nsp"
-
-            payload = {
-                "player": {
-                    "email": email,
-                    "password": password,
-                    "parentId": self.PARENT_ID,
-                    "login": login
-                }
-            }
-
-            r = session.scraper.post(
-                self.ORIGIN + self.ENDPOINTS['create'],
-                json=payload,
-                headers=session.headers,
-                timeout=20
-            )
-
-            data = r.json()
-            if r.status_code == 200:
-                send_admin_log(
-                    "✅ Create Player",
-                    f"👤 {login}\n📧 {email}"
-                )
-            else:
-                send_admin_log(
-                    "❌ Create Player Failed",
-                    str(data)
-                )
-
-            return r.status_code, data
-
-        except Exception as e:
-            send_admin_log("❌ API Error", f"create_player\n{str(e)}")
-            return 500, {"error": str(e)}
+    def with_retry(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            session = IChancySession(self._headers())
+            try:
+                self._ensure_login(session)
+                return func(self, session, *args, **kwargs)
+            except Exception as e:
+                self.logger.error(f"❌ API Error in {func.__name__}: {e}")
+                return 500, {"error": str(e)}
+        return wrapper
 
     # ======================
-    # إيداع
+    # وظائف اللاعبين
     # ======================
-    def deposit_to_player(self, player_id: str, amount: float):
-        session = self._new_session()
-        try:
-            self._ensure_login(session)
-            payload = {
-                "playerId": player_id,
-                "amount": amount,
-                "currency": "NSP",
-                "currencyCode": "NSP",
-                "moneyStatus": 5
-            }
-            r = session.scraper.post(
-                self.ORIGIN + self.ENDPOINTS['deposit'],
-                json=payload,
-                headers=session.headers,
-                timeout=15
-            )
-            send_admin_log(
-                "💰 Deposit",
-                f"Player: {player_id}\nAmount: {amount}"
-            )
-            return r.status_code, r.json()
-        except Exception as e:
-            send_admin_log("❌ Deposit Error", str(e))
-            return 500, {"error": str(e)}
+    @with_retry
+    def create_player_with_credentials(self, session: IChancySession, login: str, password: str):
+        email = f"{login}@agent.nsp"
+        payload = {"player": {"email": email, "password": password, "parentId": self.PARENT_ID, "login": login}}
+        r = session.scraper.post(self.ORIGIN + self.ENDPOINTS['create'], json=payload, headers=session.headers, timeout=20)
+        data = r.json()
+        return r.status_code, data
+
+    @with_retry
+    def check_player_exists(self, session: IChancySession, login: str) -> bool:
+        payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
+        r = session.scraper.post(self.ORIGIN + self.ENDPOINTS['statistics'], json=payload, headers=session.headers)
+        data = r.json()
+        records = data.get("result", {}).get("records", [])
+        return any(record.get("username") == login for record in records)
+
+    @with_retry
+    def deposit_to_player(self, session: IChancySession, player_id: str, amount: float):
+        payload = {"playerId": player_id, "amount": amount, "currency": "NSP", "currencyCode": "NSP", "moneyStatus": 5}
+        r = session.scraper.post(self.ORIGIN + self.ENDPOINTS['deposit'], json=payload, headers=session.headers)
+        return r.status_code, r.json()
+
+    @with_retry
+    def withdraw_from_player(self, session: IChancySession, player_id: str, amount: float):
+        payload = {"playerId": player_id, "amount": amount, "currency": "NSP", "currencyCode": "NSP", "moneyStatus": 5}
+        r = session.scraper.post(self.ORIGIN + self.ENDPOINTS['withdraw'], json=payload, headers=session.headers)
+        return r.status_code, r.json()
+
+    @with_retry
+    def get_player_balance(self, session: IChancySession, player_id: str):
+        payload = {"playerId": str(player_id)}
+        r = session.scraper.post(self.ORIGIN + self.ENDPOINTS['balance'], json=payload, headers=session.headers)
+        data = r.json()
+        balance = data.get("result", [{}])[0].get("balance", 0)
+        return r.status_code, data, balance
+
+    @with_retry
+    def get_all_players(self, session: IChancySession):
+        payload = {"page": 1, "pageSize": 100, "filter": {}}
+        r = session.scraper.post(self.ORIGIN + self.ENDPOINTS['statistics'], json=payload, headers=session.headers)
+        data = r.json()
+        return data.get("result", {}).get("records", [])
 
