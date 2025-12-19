@@ -245,17 +245,17 @@ def get_user_stats(telegram_id):
     }
 
 def clear_player_info(telegram_id):
-    user = users_collection.find_one({"telegram_id": telegram_id})
+    user = users.find_one({"telegram_id": telegram_id})
     if not user:
         return False
 
-    result = users_collection.update_one(
+    result = users.update_one(
         {"telegram_id": telegram_id},
         {"$unset": {
             "player_id": "",
-            "username": "",
-            "email": "",
-            "password": ""
+            "player_username": "",
+            "player_email": "",
+            "player_password": ""
         }}
     )
 
