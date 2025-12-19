@@ -116,3 +116,29 @@ class IChancyAPI:
             send_admin_log("❌ Deposit Error", str(e))
             return 500, {"error": str(e)}
 
+def check_player_exists(self, login: str) -> bool:
+    """
+    التحقق إذا كان اسم المستخدم موجودًا بالفعل
+    """
+    from ichancy_session import IChancySession
+
+    session = self._new_session()
+    try:
+        self._ensure_login(session)
+        payload = {
+            "page": 1,
+            "pageSize": 100,
+            "filter": {"login": login}
+        }
+        r = session.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=session.headers,
+            timeout=15
+        )
+        data = r.json()
+        records = data.get("result", {}).get("records", [])
+        return any(record.get("username") == login for record in records)
+    except Exception as e:
+        send_admin_log("❌ check_player_exists Error", f"{login}\n{str(e)}")
+        return False
