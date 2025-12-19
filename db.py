@@ -245,20 +245,19 @@ def get_user_stats(telegram_id):
     }
 
 def clear_player_info(telegram_id):
-    users = load_users()
-
-    uid = str(telegram_id)
-    if uid not in users:
+    user = users_collection.find_one({"telegram_id": telegram_id})
+    if not user:
         return False
 
-    removed = False
-    for key in ["player_id", "username", "email", "password"]:
-        if key in users[uid]:
-            users[uid].pop(key)
-            removed = True
+    result = users_collection.update_one(
+        {"telegram_id": telegram_id},
+        {"$unset": {
+            "player_id": "",
+            "username": "",
+            "email": "",
+            "password": ""
+        }}
+    )
 
-    if removed:
-        save_users(users)
-
-    return removed
+    return result.modified_count > 0
 
