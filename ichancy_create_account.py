@@ -30,8 +30,8 @@ def start_create_account(bot, call):
             chat_id=chat_id,
             message_id=call.message.message_id,
             text=f"⚠️ لديك حساب مسبقاً!\n\n"
-                 f"اسم المستخدم: `{existing_player['username']}`\n"
-                 f"معرف اللاعب: `{existing_player['player_id']}`\n"
+                 f"👤 اسم المستخدم: `{existing_player['username']}`\n"
+                 f"🆔 معرف اللاعب: `{existing_player['player_id']}`\n"
                  f"إذا أردت إنشاء حساب جديد، استخدم رابط آخر أو تواصل مع الدعم.",
             parse_mode="Markdown"
         )
@@ -44,20 +44,20 @@ def start_create_account(bot, call):
         text="📝 جاري تحضير إنشاء الحساب، يرجى الانتظار..."
     )
 
-    # إرسال رسائل مرحلية لتحسين تجربة المستخدم
-    time.sleep(0.5)
-    bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=call.message.message_id,
-        text="🔄 التحقق من الاسم المطلوب..."
-    )
-    time.sleep(0.5)
+    # رسائل مرحلية لإعطاء إحساس بالعمل
+    stages = [
+        "🔄 التحقق من الاسم المطلوب...",
+        "⏳ إعداد البيانات الأولية...",
+        "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
+    ]
+    for stage in stages:
+        time.sleep(0.5)
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+            text=stage
+        )
 
-    bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=call.message.message_id,
-        text="📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
-    )
     bot.register_next_step_handler_by_chat_id(
         chat_id, 
         lambda msg: process_username_step(bot, msg, telegram_id, call.message.message_id)
@@ -78,17 +78,19 @@ def process_username_step(bot, message, telegram_id, message_id):
     try:
         username = generate_username(raw_username)
 
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=message_id,
-            text=f"✅ الاسم متاح: `{username}`\n\n"
-                 f"🔐 الآن أرسل كلمة السر:\n"
-                 f"- يجب أن تحتوي على أحرف كبيرة وصغيرة\n"
-                 f"- يجب أن تحتوي على أرقام\n"
-                 f"- يجب أن تكون 8 أحرف على الأقل\n\n"
-                 f"مثال: `Pass1234`",
-            parse_mode="Markdown"
-        )
+        # رسائل مرحلية لإعطاء إحساس بالتحقق
+        stages = [
+            f"✅ الاسم متاح: `{username}`",
+            "🔐 الآن أرسل كلمة السر:\n- يجب أن تحتوي على أحرف كبيرة وصغيرة\n- يجب أن تحتوي على أرقام\n- يجب أن تكون 8 أحرف على الأقل\n\nمثال: `Pass1234`"
+        ]
+        for stage in stages:
+            time.sleep(0.5)
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=message_id,
+                text=stage,
+                parse_mode="Markdown"
+            )
 
         bot.register_next_step_handler_by_chat_id(
             message.chat.id, 
@@ -110,24 +112,23 @@ def process_password_step(bot, message, telegram_id, username, message_id):
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=message_id,
-            text="❌ كلمة المرور غير صالحة.\n"
-                 "تأكد أنها تحتوي على أحرف كبيرة وصغيرة، أرقام، وطولها 8 أحرف على الأقل."
+            text="❌ كلمة المرور غير صالحة.\nتأكد أنها تحتوي على أحرف كبيرة وصغيرة، أرقام، وطولها 8 أحرف على الأقل."
         )
         return
 
-    # إرسال رسائل مرحلية
-    bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=message_id,
-        text="🔄 جاري إنشاء الحساب، يرجى الانتظار..."
-    )
-    time.sleep(0.5)
-    bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=message_id,
-        text="⏳ يتم التحقق من بياناتك وإنشاء الحساب..."
-    )
-    time.sleep(0.5)
+    # رسائل مرحلية لإعطاء إحساس بالعمل
+    stages = [
+        "🔄 جاري إنشاء الحساب، يرجى الانتظار...",
+        "⏳ يتم التحقق من بياناتك وإنشاء الحساب...",
+        "🚀 تقريباً انتهينا..."
+    ]
+    for stage in stages:
+        time.sleep(0.5)
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=message_id,
+            text=stage
+        )
 
     try:
         email = f"{username.lower()}@player.ichancy.com"
@@ -157,10 +158,7 @@ def process_password_step(bot, message, telegram_id, username, message_id):
         db.update_player_info(telegram_id, player_id, username, email_created or email, password)
 
         # تعديل الرسالة لإظهار معلومات الحساب النهائي
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=message_id,
-            text=f"""
+        final_text = f"""
 ✅ **تم إنشاء الحساب بنجاح!**
 
 👤 **اسم المستخدم:** `{username}`
@@ -172,7 +170,11 @@ def process_password_step(bot, message, telegram_id, username, message_id):
 https://www.ichancy.com/login
 
 ⚠️ **احفظ هذه البيانات في مكان آمن!**
-""",
+"""
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=message_id,
+            text=final_text,
             parse_mode="Markdown"
         )
 
