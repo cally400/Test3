@@ -14,20 +14,27 @@ def generate_username(raw_username: str) -> str:
     """إنشاء اسم مستخدم فريد"""
     base = f"ZEUS_{raw_username}"
     for i in range(6):
-        username = base if i == 0 else f"{base}_{_random_suffix()}"
+        username = base if i == 0 else f"{base}{_random_suffix()}"
         if not api.check_player_exists(username):
             return username
     raise ValueError("❌ اسم المستخدم غير متاح، جرّب اسمًا آخر")
 
 def start_create_account(bot, call):
-    bot.send_message(
-        call.message.chat.id,
-        "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
-    )
-    bot.register_next_step_handler_by_chat_id(
-        call.message.chat.id,
-        lambda msg: process_username_step(bot, msg, call.from_user.id)
-    )
+    # التحقق إذا كان لدى المستخدم حساب مسبق
+    existing = db.get_player_by_telegram_id(call.from_user.id)
+    if existing:
+        msg_text = "⚠️ لديك حساب مسبقًا."
+    else:
+        msg_text = "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
+
+    message = bot.send_message(call.message.chat.id, msg_text)
+    
+    # تسجيل الخطوة التالية فقط إذا لم يكن لديه حساب مسبق
+    if not existing:
+        bot.register_next_step_handler_by_chat_id(
+            call.message.chat.id,
+            lambda msg: process_username_step(bot, msg, call.from_user.id)
+        )
 
 def process_username_step(bot, message, telegram_id):
     raw_username = message.text.strip()
@@ -40,20 +47,19 @@ def process_username_step(bot, message, telegram_id):
     try:
         username = generate_username(raw_username)
         
-        # إرسال رسالة شريط تقدم
+        # إنشاء رسالة شريط التقدم بعد إرسال الاسم مباشرة
         progress_msg = bot.send_message(message.chat.id, "⏳ جاري التحقق من الاسم:\n[░░░░░░░░░░] 0%")
-        
-        # تحديث شريط التقدم تدريجيًا
         for i in range(1, 11):
-            time.sleep(0.3)  # تأخير وهمي بين التحديثات
+            time.sleep(0.3)
             progress_bar = "█" * i + "░" * (10 - i)
             bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=progress_msg.message_id,
                 text=f"⏳ جاري التحقق من الاسم:\n[{progress_bar}] {i*10}%"
             )
-        
-        # بعد اكتمال الشريط، إرسال طلب كلمة المرور
+        # حذف شريط التقدم عند اكتمال 100%
+        bot.delete_message(chat_id=message.chat.id, message_id=progress_msg.message_id)
+
         bot.send_message(
             message.chat.id, 
             f"✅ الاسم متاح: `{username}`\n\n"
@@ -94,6 +100,18 @@ def process_password_step(bot, message, telegram_id, username):
             bot.send_message(message.chat.id, "❌ هذا الاسم مستخدم بالفعل، يرجى اختيار اسم آخر")
             return
         
+        # شريط التقدم أثناء إنشاء الحساب
+        progress_msg = bot.send_message(message.chat.id, "⏳ جاري إنشاء الحساب:\n[░░░░░░░░░░] 0%")
+        for i in range(1, 11):
+            time.sleep(0.3)
+            progress_bar = "█" * i + "░" * (10 - i)
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=progress_msg.message_id,
+                text=f"⏳ جاري إنشاء الحساب:\n[{progress_bar}] {i*10}%"
+            )
+        bot.delete_message(chat_id=message.chat.id, message_id=progress_msg.message_id)
+
         status, data, player_id, email_created = api.create_player_with_credentials(username, password)
         
         if status != 200:
