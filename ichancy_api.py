@@ -1,5 +1,5 @@
 
-ichancy_api.py - النسخة المعدلة مع الإشعارات وإعادة الاتصال التلقائي
+#ichancy_api.py - النسخة المعدلة مع الإشعارات وإعادة الاتصال التلقائي
 
 import cloudscraper
 import random
