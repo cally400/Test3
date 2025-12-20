@@ -724,62 +724,224 @@ class IChancyAPI:
         
         self.logger.info("✅ تم إيقاف النظام بنجاح")
     
-    # ========== دوال API الأصلية (معدلة قليلاً) ==========
-    
+    # ========== دوال API الأصلية (معدلة قليلاً) =========
     @with_retry
     def create_player(self, login=None, password=None) -> Tuple[int, dict, str, str, Optional[str]]:
         """إنشاء لاعب جديد"""
-        # الكود الأصلي...
-        pass
-    
+        login = login or "u" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))
+        password = password or "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
+        email = f"{login}@example.com"
+
+        payload = {
+            "player": {
+                "email": email,
+                "password": password,
+                "parentId": self.PARENT_ID,
+                "login": login
+            }
+        }
+
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['create'],
+            json=payload,
+            headers=self._get_headers()
+        )
+
+        try:
+            data = resp.json()
+            player_id = self.get_player_id(login)
+            return resp.status_code, data, login, password, player_id
+        except Exception:
+            return resp.status_code, {}, login, password, None
+
     @with_retry
     def get_player_id(self, login: str) -> Optional[str]:
         """الحصول على معرف اللاعب"""
-        # الكود الأصلي...
-        pass
-    
+        payload = {
+            "page": 1,
+            "pageSize": 100,
+            "filter": {"login": login}
+        }
+
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=self._get_headers()
+        )
+
+        try:
+            data = resp.json()
+            records = data.get("result", {}).get("records", [])
+            for record in records:
+                if record.get("username") == login:
+                    return record.get("playerId")
+        except Exception:
+            pass
+        return None
+
     @with_retry
     def create_player_with_credentials(self, login: str, password: str) -> Tuple[int, dict, Optional[str], str]:
         """إنشاء لاعب ببيانات محددة"""
-        # الكود الأصلي...
-        pass
-    
+        email = f"{login}@agint.nsp"
+        # التأكد من تفرد الإيميل
+        suffix = 1
+        while self.check_email_exists(email):
+            email = f"{login}_{suffix}@agint.nsp"
+            suffix += 1
+
+        payload = {
+            "player": {
+                "email": email,
+                "password": password,
+                "parentId": self.PARENT_ID,
+                "login": login
+            }
+        }
+
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['create'],
+            json=payload,
+            headers=self._get_headers()
+        )
+
+        try:
+            data = resp.json()
+            player_id = self.get_player_id(login)
+            return resp.status_code, data, player_id, email
+        except Exception:
+            return resp.status_code, {}, None, email
+
     @with_retry
     def check_email_exists(self, email: str) -> bool:
         """التحقق من وجود إيميل"""
-        # الكود الأصلي...
-        pass
-    
+        payload = {
+            "page": 1,
+            "pageSize": 100,
+            "filter": {"email": email}
+        }
+
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=self._get_headers()
+        )
+
+        try:
+            data = resp.json()
+            records = data.get("result", {}).get("records", [])
+            return any(record.get("email") == email for record in records)
+        except Exception:
+            return False
+
     @with_retry
     def check_player_exists(self, login: str) -> bool:
         """التحقق من وجود لاعب"""
-        # الكود الأصلي...
-        pass
-    
+        payload = {
+            "page": 1,
+            "pageSize": 100,
+            "filter": {"login": login}
+        }
+
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=self._get_headers()
+        )
+
+        try:
+            data = resp.json()
+            records = data.get("result", {}).get("records", [])
+            return any(record.get("username") == login for record in records)
+        except Exception:
+            return False
+
     @with_retry
     def deposit_to_player(self, player_id: str, amount: float) -> Tuple[int, dict]:
         """إيداع رصيد للاعب"""
-        # الكود الأصلي...
-        pass
-    
+        payload = {
+            "amount": amount,
+            "comment": "Deposit from API",
+            "playerId": player_id,
+            "currencyCode": "NSP",
+            "currency": "NSP",
+            "moneyStatus": 5
+        }
+
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['deposit'],
+            json=payload,
+            headers=self._get_headers()
+        )
+
+        try:
+            data = resp.json()
+            return resp.status_code, data
+        except Exception:
+            return resp.status_code, {}
+
     @with_retry
     def withdraw_from_player(self, player_id: str, amount: float) -> Tuple[int, dict]:
         """سحب رصيد من اللاعب"""
-        # الكود الأصلي...
-        pass
-    
+        payload = {
+            "amount": amount,
+            "comment": "Withdrawal from API",
+            "playerId": player_id,
+            "currencyCode": "NSP",
+            "currency": "NSP",
+            "moneyStatus": 5
+        }
+
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['withdraw'],
+            json=payload,
+            headers=self._get_headers()
+        )
+
+        try:
+            data = resp.json()
+            return resp.status_code, data
+        except Exception:
+            return resp.status_code, {}
+
     @with_retry
     def get_player_balance(self, player_id: str) -> Tuple[int, dict, float]:
         """الحصول على رصيد اللاعب"""
-        # الكود الأصلي...
-        pass
-    
+        payload = {"playerId": str(player_id)}
+
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['balance'],
+            json=payload,
+            headers=self._get_headers()
+        )
+
+        try:
+            data = resp.json()
+            results = data.get("result", [])
+            balance = results[0].get("balance", 0) if isinstance(results, list) and results else 0
+            return resp.status_code, data, balance
+        except Exception:
+            return resp.status_code, {}, 0
+
     @with_retry
     def get_all_players(self) -> list:
         """الحصول على جميع اللاعبين"""
-        # الكود الأصلي...
-        pass
+        payload = {
+            "page": 1,
+            "pageSize": 100,
+            "filter": {}
+        }
 
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=self._get_headers()
+        )
+
+        try:
+            data = resp.json()
+            return data.get("result", {}).get("records", [])
+        except Exception:
+            return []
 # ========== مثال الاستخدام ==========
 
 if __name__ == "__main__":
