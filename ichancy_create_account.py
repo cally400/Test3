@@ -37,24 +37,47 @@ def show_progress(bot, chat_id, text_prefix="⏳ جاري:", duration=3):
 
 def start_create_account(bot, call):
     telegram_id = call.from_user.id
+    # إرسال الرسالة الأولى وتخزين معرفها للتعديل
+    first_msg = bot.send_message(call.message.chat.id, "📝 جاري التحقق...")
+    
     player_data = db.get_player_info(telegram_id)
-    
+
     if player_data:
-        bot.send_message(call.message.chat.id, "ℹ️ لديك حساب مسبقًا")
+        # تعديل الرسالة إذا كان لديه حساب مسبق
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=first_msg.message_id,
+            text="ℹ️ لديك حساب مسبقًا"
+        )
         return
-    
-    msg = bot.send_message(call.message.chat.id, "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):")
-    
+    else:
+        # تعديل الرسالة إذا لم يكن لديه حساب مسبق
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=first_msg.message_id,
+            text="📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
+        )
+
     bot.register_next_step_handler_by_chat_id(
         call.message.chat.id,
-        lambda message: process_username_step(bot, message, telegram_id)
+        lambda message: process_username_step(bot, message, telegram_id, first_msg.message_id)
     )
 
-def process_username_step(bot, message, telegram_id):
+def process_username_step(bot, message, telegram_id, first_msg_id):
     raw_username = ''.join(c for c in message.text.strip() if c.isalnum() or c in ['_', '-'])
     if len(raw_username) < 3:
         bot.send_message(message.chat.id, "❌ الاسم قصير جداً، يجب أن يكون 3 أحرف على الأقل")
         return
+
+    # تعديل الرسالة الأولى ليظهر الاسم الذي أدخله المستخدم
+    try:
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=first_msg_id,
+            text=f"📝 الاسم قيد التحقق: `{raw_username}`"
+        )
+    except:
+        pass
 
     # شريط التقدم بعد إدخال الاسم مباشرة
     show_progress(bot, message.chat.id, "⏳ جاري التحقق من الاسم:", 3)
