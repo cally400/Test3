@@ -1,4 +1,4 @@
-# ichancy_api.py - النسخة المعدلة مع تقليل الرسائل
+# ichancy_api.py - النسخة المعدلة مع نظام تحديث الرسائل
 
 import cloudscraper
 import random
@@ -24,14 +24,18 @@ class IChancyAPI:
         self.TELEGRAM_CHAT_ID = telegram_chat_id or os.getenv("TELEGRAM_CHAT_ID", "-1003317405069")
         self.telegram_enabled = bool(self.TELEGRAM_BOT_TOKEN and self.TELEGRAM_CHAT_ID)
         
-        # متغيرات التحكم في الإشعارات
-        self._last_notification_time = {}
-        self._notification_cooldown = {
+        # متغيرات نظام الرسائل
+        self._last_message_id = None  # حفظ معرف آخر رسالة
+        self._message_update_interval = 60  # تحديث الرسالة كل 60 ثانية
+        self._last_message_update = 0
+        self._current_status_message = ""  # حفظ محتوى الرسالة الحالية
+        self._message_cooldowns = {
             'error': 300,      # 5 دقائق للأخطاء
-            'reconnect': 60,   # دقيقة واحدة لإعادة الاتصال
-            'status': 3600,    # ساعة واحدة للحالة
-            'success': 1800,   # 30 دقيقة للنجاحات
+            'reconnect': 120,  # دقيقتان لإعادة الاتصال
+            'success': 600,    # 10 دقائق للنجاحات
+            'status': 3600,    # ساعة للحالة
         }
+        self._last_notification_time = {}
         
         # متغيرات الجلسة
         self.scraper = None
@@ -43,9 +47,10 @@ class IChancyAPI:
         self._session_lock = threading.Lock()
         self._heartbeat_thread = None
         self._auto_reconnect_thread = None
+        self._status_monitor_thread = None
         self._stop_threads = threading.Event()
         self._retry_count = 0
-        self.max_retries = 5
+        self.max_retries = 10
         self.consecutive_failures = 0
         self.total_reconnects = 0
         self.start_time = datetime.now()
@@ -61,14 +66,16 @@ class IChancyAPI:
             'failed_logins': 0,
             'reconnects': 0,
             'last_error': None,
-            'last_success': None,
-            'operations_count': 0
+            'last_success': datetime.now().strftime('%H:%M:%S'),
+            'operations_count': 0,
+            'last_status_update': datetime.now().strftime('%H:%M:%S')
         }
         
         # بدء النظام
         self._init_scraper()
         if self.telegram_enabled:
-            self._send_startup_notification()
+            self._send_initial_status_message()
+            self._start_status_monitor()
         
     def _setup_logging(self):
         """تهيئة نظام التسجيل"""
@@ -108,121 +115,229 @@ class IChancyAPI:
         
         self.SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT", "1800"))
 
-    # ========== نظام إشعارات التلغرام مع تقليل ==========
+    # ========== نظام رسائل التلغرام المتقدم ==========
     
-    def _can_send_notification(self, notification_type: str) -> bool:
-        """التحقق من إمكانية إرسال الإشعار"""
-        now = time.time()
-        last_time = self._last_notification_time.get(notification_type, 0)
-        cooldown = self._notification_cooldown.get(notification_type, 60)
-        
-        if now - last_time < cooldown:
-            return False
-        
-        self._last_notification_time[notification_type] = now
-        return True
-    
-    def _send_telegram_message(self, message: str, parse_mode="HTML"):
-        """إرسال رسالة إلى قناة التلغرام"""
+    def _send_telegram_message(self, message: str, parse_mode="HTML", message_id=None):
+        """إرسال أو تحديث رسالة في التلغرام"""
         if not self.telegram_enabled:
-            return False
+            return None
             
         try:
-            url = f"https://api.telegram.org/bot{self.TELEGRAM_BOT_TOKEN}/sendMessage"
-            payload = {
-                'chat_id': self.TELEGRAM_CHAT_ID,
-                'text': message,
-                'parse_mode': parse_mode,
-                'disable_web_page_preview': True
-            }
+            if message_id:
+                # تحديث رسالة موجودة
+                url = f"https://api.telegram.org/bot{self.TELEGRAM_BOT_TOKEN}/editMessageText"
+                payload = {
+                    'chat_id': self.TELEGRAM_CHAT_ID,
+                    'message_id': message_id,
+                    'text': message,
+                    'parse_mode': parse_mode,
+                    'disable_web_page_preview': True
+                }
+            else:
+                # إرسال رسالة جديدة
+                url = f"https://api.telegram.org/bot{self.TELEGRAM_BOT_TOKEN}/sendMessage"
+                payload = {
+                    'chat_id': self.TELEGRAM_CHAT_ID,
+                    'text': message,
+                    'parse_mode': parse_mode,
+                    'disable_web_page_preview': True
+                }
             
             response = requests.post(url, json=payload, timeout=10)
-            return response.status_code == 200
+            if response.status_code == 200:
+                data = response.json()
+                if not message_id and 'result' in data and 'message_id' in data['result']:
+                    self._last_message_id = data['result']['message_id']
+                return True
+            return False
                 
-        except Exception:
+        except Exception as e:
+            self.logger.error(f"خطأ في إرسال/تحديث رسالة التلغرام: {str(e)}")
             return False
     
-    def _send_startup_notification(self):
-        """إرسال إشعار بدء التشغيل"""
+    def _can_send_notification(self, notification_type: str) -> bool:
+        """التحقق من إمكانية إرسال إشعار"""
+        now = time.time()
+        last_time = self._last_notification_time.get(notification_type, 0)
+        cooldown = self._message_cooldowns.get(notification_type, 60)
+        
+        return now - last_time >= cooldown
+    
+    def _update_notification_time(self, notification_type: str):
+        """تحديث وقت آخر إشعار"""
+        self._last_notification_time[notification_type] = time.time()
+    
+    def _send_initial_status_message(self):
+        """إرسال رسالة الحالة الأولية"""
+        message = self._generate_status_message("🚀 بدء التشغيل")
+        if self._send_telegram_message(message):
+            self._current_status_message = message
+            self._last_message_update = time.time()
+            self.logger.info("✅ تم إرسال رسالة الحالة الأولية")
+    
+    def _start_status_monitor(self):
+        """بدء مراقب تحديث الرسالة"""
+        if self._status_monitor_thread and self._status_monitor_thread.is_alive():
+            return
+            
+        self._status_monitor_thread = threading.Thread(
+            target=self._status_monitor_loop,
+            daemon=True,
+            name="StatusMonitor"
+        )
+        self._status_monitor_thread.start()
+        self.logger.info("📊 بدأ مراقب تحديث الرسالة")
+    
+    def _status_monitor_loop(self):
+        """حلقة تحديث الرسالة"""
+        while not self._stop_threads.is_set():
+            try:
+                time.sleep(self._message_update_interval)
+                
+                # تحديث الرسالة إذا مر وقت كافٍ
+                now = time.time()
+                if now - self._last_message_update >= self._message_update_interval:
+                    self._update_status_message()
+                    
+            except Exception as e:
+                self.logger.error(f"خطأ في مراقب الرسالة: {str(e)}")
+                time.sleep(60)
+    
+    def _update_status_message(self):
+        """تحديث رسالة الحالة الحالية"""
+        if not self._last_message_id or not self.telegram_enabled:
+            return
+        
+        new_message = self._generate_status_message("🔄 تحديث الحالة")
+        if new_message != self._current_status_message:
+            if self._send_telegram_message(new_message, message_id=self._last_message_id):
+                self._current_status_message = new_message
+                self._last_message_update = time.time()
+                self.stats['last_status_update'] = datetime.now().strftime('%H:%M:%S')
+    
+    def _generate_status_message(self, title="📊 حالة النظام"):
+        """إنشاء رسالة الحالة"""
+        session_info = self.get_session_info()
+        
+        # حالة الاتصال مع إيموجي
+        connection_status = "✅ متصل" if self.is_logged_in else "❌ منقطع"
+        connection_emoji = "🟢" if self.is_logged_in else "🔴"
+        
+        # وقت التشغيل
+        uptime = self._get_uptime()
+        
+        # معدل النجاح
+        success_rate = self._calculate_success_rate()
+        
+        # آخر تحديث
+        last_update = self.stats['last_status_update']
+        
+        # معلومات الجلسة
+        session_expiry = session_info.get('session_expiry', 'N/A')
+        if session_expiry != 'N/A':
+            try:
+                expiry_time = datetime.strptime(session_expiry, '%Y-%m-%d %H:%M:%S')
+                remaining = expiry_time - datetime.now()
+                if remaining.total_seconds() > 0:
+                    hours, remainder = divmod(int(remaining.total_seconds()), 3600)
+                    minutes, _ = divmod(remainder, 60)
+                    session_expiry = f"{hours}:{minutes:02d}"
+                else:
+                    session_expiry = "منتهية"
+            except:
+                session_expiry = session_expiry[-8:] if len(session_expiry) > 8 else session_expiry
+        
         message = f"""
-🚀 <b>بدء تشغيل نظام IChancy API</b>
+{title}
 ━━━━━━━━━━━━━━━━━━
-📅 <b>التاريخ:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-👤 <b>الحساب:</b> {self.USERNAME[:10]}...
-🆔 <b>Parent ID:</b> {self.PARENT_ID}
-🔗 <b>السيرفر:</b> {self.ORIGIN}
+{connection_emoji} <b>الحالة:</b> {connection_status}
+⏰ <b>الصلاحية:</b> {session_expiry}
+🆔 <b>المعرف:</b> {session_info.get('session_id', 'N/A')[:8]}
 ━━━━━━━━━━━━━━━━━━
-✅ <i>النظام جاهز للعمل</i>
+📈 <b>الإحصائيات:</b>
+• التشغيل: {uptime}
+• النجاح: {success_rate}%
+• إعادة اتصال: {self.total_reconnects}
+• محاولات فاشلة: {self.consecutive_failures}
+━━━━━━━━━━━━━━━━━━
+📊 <b>الأداء:</b>
+• عمليات الدخول: {self.stats['total_logins']}
+• فشل الدخول: {self.stats['failed_logins']}
+• العمليات: {self.stats['operations_count']}
+━━━━━━━━━━━━━━━━━━
+🕒 <b>آخر تحديث:</b> {last_update}
+━━━━━━━━━━━━━━━━━━
+📝 <b>آخر خطأ:</b>
+{self.stats['last_error'][:50] if self.stats['last_error'] else 'لا توجد أخطاء'}
         """
-        self._send_telegram_message(message)
+        
+        return message.strip()
     
     def _send_important_notification(self, event_type: str, details: str = ""):
-        """إرسال إشعار مهم فقط (مع تقليل التكرار)"""
+        """إرسال إشعار مهم مع التحديث"""
         if not self._can_send_notification('status'):
             return
         
-        session_info = self.get_session_info()
+        # تحديث الرسالة الرئيسية أولاً
+        self._update_status_message()
         
-        emoji = "✅"
-        if "error" in event_type.lower() or "fail" in event_type.lower():
-            emoji = "❌"
-        elif "reconnect" in event_type.lower():
-            emoji = "🔄"
-        elif "warning" in event_type.lower():
-            emoji = "⚠️"
+        # إرسال إشعار منفصل إذا كان مهماً
+        if "error" in event_type.lower() and self._can_send_notification('error'):
+            self._send_error_notification(details, event_type)
+            self._update_notification_time('error')
         
-        message = f"""
-{emoji} <b>{event_type}</b>
-━━━━━━━━━━━━━━━━━━
-🆔 <b>معرف الجلسة:</b> {session_info.get('session_id', 'N/A')[:8]}
-🔐 <b>الحالة:</b> {'✅ متصل' if session_info.get('is_logged_in') else '❌ منقطع'}
-🔄 <b>إعادة الاتصال:</b> {self.total_reconnects}
-📊 <b>معدل النجاح:</b> {self._calculate_success_rate()}%
-━━━━━━━━━━━━━━━━━━
-📝 <b>التفاصيل:</b>
-{details[:100]}
-        """
-        self._send_telegram_message(message)
+        elif "reconnect" in event_type.lower() and self._can_send_notification('reconnect'):
+            self._send_reconnect_notification(details)
+            self._update_notification_time('reconnect')
     
-    def _send_error_notification(self, error_message: str, function_name: str = ""):
-        """إرسال إشعار خطأ مهم فقط"""
-        if not self._can_send_notification('error'):
-            return
-        
+    def _send_error_notification(self, error_message: str, context: str = ""):
+        """إرسال إشعار خطأ"""
         message = f"""
 🚨 <b>خطأ في النظام</b>
 ━━━━━━━━━━━━━━━━━━
 🕒 <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}
-⚙️ <b>الدالة:</b> {function_name}
+📌 <b>السياق:</b> {context}
 ❌ <b>الخطأ:</b> {error_message[:100]}
-🔄 <b>المحاولات:</b> {self.consecutive_failures}
 ━━━━━━━━━━━━━━━━━━
-<i>جاري الإصلاح التلقائي...</i>
+<i>تم تحديث حالة النظام</i>
         """
         self._send_telegram_message(message)
     
-    def _send_daily_summary(self):
-        """إرسال ملخص يومي فقط"""
-        if not self._can_send_notification('status'):
-            return
-        
-        uptime = self._get_uptime()
-        success_rate = self._calculate_success_rate()
-        
+    def _send_reconnect_notification(self, details: str = ""):
+        """إرسال إشعار إعادة اتصال"""
         message = f"""
-📊 <b>ملخص أداء النظام</b>
+🔄 <b>إعادة اتصال</b>
 ━━━━━━━━━━━━━━━━━━
-📅 <b>التاريخ:</b> {datetime.now().strftime('%Y-%m-%d')}
-⏰ <b>مدة التشغيل:</b> {uptime}
-🔄 <b>عمليات الدخول:</b> {self.stats['total_logins']}
-❌ <b>فشل الدخول:</b> {self.stats['failed_logins']}
-🔗 <b>إعادة الاتصال:</b> {self.total_reconnects}
-📈 <b>معدل النجاح:</b> {success_rate}%
-🔐 <b>الحالة:</b> {'✅ نشط' if self.is_logged_in else '❌ غير نشط'}
+🕒 <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}
+📌 <b>التفاصيل:</b> {details[:80]}
+🔢 <b>الإجمالي:</b> {self.total_reconnects}
 ━━━━━━━━━━━━━━━━━━
-<i>النظام يعمل بشكل طبيعي</i>
+<i>تم تحديث حالة النظام</i>
         """
         self._send_telegram_message(message)
+    
+    def send_manual_status_report(self):
+        """إرسال تقرير حالة يدوي"""
+        if not self.telegram_enabled:
+            return "غير مفعل"
+        
+        # تحديث الرسالة الحالية
+        self._update_status_message()
+        
+        # إرسال تقرير منفصل
+        report_message = f"""
+📋 <b>تقرير حالة يدوي</b>
+━━━━━━━━━━━━━━━━━━
+🕒 <b>الوقت:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⏰ <b>بدء التشغيل:</b> {self.start_time.strftime('%H:%M:%S')}
+🔄 <b>المدة:</b> {self._get_uptime()}
+📊 <b>معدل النجاح:</b> {self._calculate_success_rate()}%
+━━━━━━━━━━━━━━━━━━
+✅ <i>تم تحديث حالة النظام الرئيسية</i>
+        """
+        
+        self._send_telegram_message(report_message)
+        return "تم إرسال التقرير وتحديث الحالة"
     
     # ========== دوال مساعدة ==========
     
@@ -233,30 +348,30 @@ class IChancyAPI:
         
         if total == 0:
             return 100
-        return round(((total - failed) / total) * 100, 2)
+        success_rate = round(((total - failed) / total) * 100, 1)
+        return success_rate
     
     def _get_uptime(self):
         """الحصول على مدة التشغيل"""
         uptime = datetime.now() - self.start_time
-        days = uptime.days
+        
+        if uptime.days > 0:
+            return f"{uptime.days} يوم"
+        
         hours = uptime.seconds // 3600
         minutes = (uptime.seconds % 3600) // 60
         
-        if days > 0:
-            return f"{days} يوم, {hours} ساعة"
-        elif hours > 0:
-            return f"{hours} ساعة, {minutes} دقيقة"
-        else:
-            return f"{minutes} دقيقة"
+        if hours > 0:
+            return f"{hours} ساعة"
+        return f"{minutes} دقيقة"
     
-    # ========== نظام إعادة الاتصال التلقائي المبسط ==========
+    # ========== نظام إعادة الاتصال التلقائي ==========
     
     def _start_auto_reconnect(self):
         """بدء نظام إعادة الاتصال التلقائي"""
         if self._auto_reconnect_thread and self._auto_reconnect_thread.is_alive():
             return
             
-        self._stop_threads.clear()
         self._auto_reconnect_thread = threading.Thread(
             target=self._auto_reconnect_loop,
             daemon=True,
@@ -275,45 +390,34 @@ class IChancyAPI:
                 if not self.is_logged_in or not self._perform_health_check():
                     self.consecutive_failures += 1
                     
-                    # إرسال إشعار فقط بعد عدة محاولات فاشلة
-                    if self.consecutive_failures >= 3 and self._can_send_notification('reconnect'):
+                    # إرسال إشعار بعد عدة محاولات فاشلة
+                    if self.consecutive_failures >= 2:
                         self._send_important_notification(
-                            "محاولة إعادة اتصال",
-                            f"المحاولات الفاشلة: {self.consecutive_failures}"
+                            "فقدان الاتصال",
+                            f"المحاولة {self.consecutive_failures}"
                         )
                     
                     # محاولة إعادة الاتصال
                     if self._simple_reconnect():
                         self.consecutive_failures = 0
                         self.total_reconnects += 1
+                        self.stats['last_success'] = datetime.now().strftime('%H:%M:%S')
                         
-                        # إشعار النجاح مرة واحدة فقط
-                        if self._can_send_notification('success'):
-                            self._send_important_notification(
-                                "تم استعادة الاتصال",
-                                f"بعد {self.total_reconnects} محاولات"
-                            )
-                    else:
-                        # زيادة التأخير
-                        extra_delay = min(self.consecutive_failures * 10, 120)
-                        time.sleep(extra_delay)
-                
-                # إرسال ملخص يومي في منتصف الليل
-                current_time = datetime.now()
-                if current_time.hour == 0 and current_time.minute < 5:
-                    self._send_daily_summary()
-                    time.sleep(300)  # تأخير 5 دقائق
+                        # تحديث الرسالة فقط
+                        self._update_status_message()
                     
             except Exception as e:
-                self.logger.error(f"خطأ في حلقة إعادة الاتصال: {str(e)}")
-                time.sleep(60)
+                self.logger.error(f"خطأ في إعادة الاتصال: {str(e)}")
+                self.stats['last_error'] = str(e)
+                time.sleep(30)
     
     def _simple_reconnect(self, max_attempts=3):
         """إعادة اتصال مبسطة"""
-        for attempt in range(1, max_attempts + 1):
+        for attempt in range(max_attempts):
             try:
                 # الانتظار قبل المحاولة
-                time.sleep(2 ** attempt)  # تأخير متزايد
+                wait_time = 2 ** (attempt + 1)
+                time.sleep(wait_time)
                 
                 # إعادة تهيئة
                 self.scraper = None
@@ -326,12 +430,13 @@ class IChancyAPI:
                 if success:
                     return True
                     
-            except Exception:
+            except Exception as e:
+                self.logger.error(f"محاولة {attempt + 1} فشلت: {str(e)}")
                 continue
         
         return False
     
-    # ========== نظام ضربات القلب المبسط ==========
+    # ========== نظام ضربات القلب ==========
     
     def _start_heartbeat(self):
         """بدء نظام ضربات القلب"""
@@ -353,14 +458,16 @@ class IChancyAPI:
                 time.sleep(self._health_check_interval)
                 
                 if self.is_logged_in:
-                    # إجراء فحص صحي
                     if self._perform_health_check():
-                        # تحديث وقت انتهاء الصلاحية
                         self.session_expiry = datetime.now() + timedelta(seconds=self.SESSION_TIMEOUT)
+                        # تحديث الرسالة كل فترة
+                        if time.time() - self._last_message_update >= 300:  # كل 5 دقائق
+                            self._update_status_message()
                     else:
                         self.is_logged_in = False
                         
-            except Exception:
+            except Exception as e:
+                self.logger.error(f"خطأ في ضربات القلب: {str(e)}")
                 time.sleep(60)
     
     # ========== الدوال الأساسية ==========
@@ -388,6 +495,7 @@ class IChancyAPI:
                     
             except Exception as e:
                 self.logger.error(f"فشل في تهيئة السكرابر: {str(e)}")
+                self.stats['last_error'] = str(e)
                 return False
     
     def _get_headers(self):
@@ -436,13 +544,20 @@ class IChancyAPI:
                     self._generate_session_id()
                     
                     self.logger.info("تم تسجيل الدخول بنجاح")
+                    self.stats['last_success'] = datetime.now().strftime('%H:%M:%S')
                     
                     self._retry_count = 0
                     self.consecutive_failures = 0
                     
+                    # تحديث الرسالة
+                    if self.telegram_enabled:
+                        self._update_status_message()
+                    
                     return True, data
                 else:
+                    error_msg = data.get("notification", [{}])[0].get("content", "فشل تسجيل الدخول")
                     self.stats['failed_logins'] += 1
+                    self.stats['last_error'] = error_msg
                     
                     if attempt < max_retries - 1:
                         time.sleep(2 ** attempt)
@@ -478,7 +593,6 @@ class IChancyAPI:
     def ensure_login(self):
         """التأكد من تسجيل الدخول"""
         with self._session_lock:
-            # التحقق من الجلسة الحالية
             if (self.is_logged_in and 
                 self.scraper and 
                 self._is_session_valid()):
@@ -487,22 +601,12 @@ class IChancyAPI:
             
             self.logger.info("محاولة تأسيس/استعادة الجلسة...")
             
-            # محاولة تسجيل دخول جديد
             success, data = self.login()
             
             if not success:
                 error_msg = data.get("error", "فشل تسجيل الدخول")
                 self.logger.error(f"فشل في تأسيس الجلسة: {error_msg}")
-                
-                # إرسال إشعار خطأ مهم فقط
-                if self._can_send_notification('error'):
-                    self._send_error_notification(error_msg, "ensure_login")
-                
                 return False
-            
-            # إرسال إشعار نجاح مهم فقط
-            if self._can_send_notification('success'):
-                self._send_important_notification("تأسيس الجلسة", "تم بنجاح")
             
             return True
     
@@ -536,16 +640,22 @@ class IChancyAPI:
         except Exception:
             return False
     
-    # ========== decorator مبسط ==========
+    # ========== decorator ==========
     
     def with_retry(func):
         """مُعدِّل لإعادة المحاولة"""
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            for attempt in range(2):  # محاولتان فقط
+            for attempt in range(2):
                 try:
                     self.ensure_login()
-                    return func(self, *args, **kwargs)
+                    result = func(self, *args, **kwargs)
+                    
+                    # تحديث الرسالة بعد العملية الناجحة
+                    if result and attempt == 0 and self.telegram_enabled:
+                        self._update_status_message()
+                    
+                    return result
                 except Exception as e:
                     self.logger.error(f"خطأ في {func.__name__}: {str(e)}")
                     if attempt == 0:
@@ -567,61 +677,40 @@ class IChancyAPI:
         return {
             "is_logged_in": self.is_logged_in,
             "session_id": self.session_id,
-            "session_expiry": self.session_expiry.strftime("%H:%M:%S") if self.session_expiry else None,
+            "session_expiry": self.session_expiry.strftime("%Y-%m-%d %H:%M:%S") if self.session_expiry else None,
             "session_age": session_age,
             "consecutive_failures": self.consecutive_failures,
             "total_reconnects": self.total_reconnects,
             "uptime": self._get_uptime(),
-            "success_rate": self._calculate_success_rate()
+            "success_rate": self._calculate_success_rate(),
+            "stats": self.stats
         }
-    
-    def send_status_report(self):
-        """إرسال تقرير حالة يدوي"""
-        if not self._can_send_notification('status'):
-            return "يجب الانتظار قبل إرسال تقرير آخر"
-        
-        session_info = self.get_session_info()
-        
-        message = f"""
-📋 <b>تقرير حالة يدوي</b>
-━━━━━━━━━━━━━━━━━━
-🕒 <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}
-🔐 <b>حالة الدخول:</b> {'✅ متصل' if session_info['is_logged_in'] else '❌ منقطع'}
-🆔 <b>معرف الجلسة:</b> {session_info['session_id'] or 'N/A'}
-⏳ <b>مدة التشغيل:</b> {session_info['uptime']}
-🔄 <b>إعادة الاتصال:</b> {session_info['total_reconnects']}
-📊 <b>معدل النجاح:</b> {session_info['success_rate']}%
-━━━━━━━━━━━━━━━━━━
-        """
-        self._send_telegram_message(message)
-        return "تم إرسال التقرير"
     
     def stop(self):
         """إيقاف النظام"""
         self.logger.info("🛑 إيقاف النظام...")
         
-        # إرسال إشعار إيقاف مهم فقط
-        if self.telegram_enabled and self._can_send_notification('status'):
-            uptime = self._get_uptime()
-            stop_message = f"""
+        # إرسال رسالة إيقاف نهائية
+        if self.telegram_enabled:
+            final_message = f"""
 🛑 <b>إيقاف النظام</b>
 ━━━━━━━━━━━━━━━━━━
 🕒 <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}
-⏳ <b>مدة التشغيل:</b> {uptime}
-🔄 <b>إعادة الاتصال:</b> {self.total_reconnects}
+⏰ <b>مدة التشغيل:</b> {self._get_uptime()}
 📊 <b>معدل النجاح:</b> {self._calculate_success_rate()}%
+🔄 <b>إعادة الاتصال:</b> {self.total_reconnects}
 ━━━━━━━━━━━━━━━━━━
+✅ <i>تم إيقاف النظام بنجاح</i>
             """
-            self._send_telegram_message(stop_message)
+            self._send_telegram_message(final_message)
         
         # إيقاف الخيوط
         self._stop_threads.set()
         
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            self._heartbeat_thread.join(timeout=3)
-        
-        if self._auto_reconnect_thread and self._auto_reconnect_thread.is_alive():
-            self._auto_reconnect_thread.join(timeout=3)
+        threads = [self._heartbeat_thread, self._auto_reconnect_thread, self._status_monitor_thread]
+        for thread in threads:
+            if thread and thread.is_alive():
+                thread.join(timeout=3)
         
         # تنظيف الموارد
         self.is_logged_in = False
@@ -629,6 +718,7 @@ class IChancyAPI:
         self.session_expiry = None
         self.session_id = None
         self.scraper = None
+        self._last_message_id = None
         
         self.logger.info("✅ تم إيقاف النظام")
     
@@ -851,14 +941,12 @@ class IChancyAPI:
         except Exception:
             return []
 
-# ========== استخدام مباشر (اختياري) ==========
+# ========== استخدام مباشر ==========
 
 if __name__ == "__main__":
-    # إنشاء API - ستستخدم متغيرات البيئة للتلغرام
     api = IChancyAPI()
     
     try:
-        # محاولة الاتصال
         if api.ensure_login():
             print("✅ تم الاتصال بنجاح")
             print(api.get_session_info())
