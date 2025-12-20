@@ -77,6 +77,18 @@ class IChancyAPI:
         except Exception:
             pass
 
+    # ================= SAFE JSON =================
+
+    def safe_json(self, resp):
+        try:
+            if not resp or not resp.text:
+                return None
+            return resp.json()
+        except Exception:
+            self.logger.warning("⚠️ Non-JSON response (Cloudflare / HTML)")
+            self.reset_session("Non-JSON response")
+            return None
+
     # ================= SESSION =================
 
     def _init_scraper(self):
@@ -138,17 +150,8 @@ class IChancyAPI:
     def login(self):
         self._init_scraper()
 
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": random.choice(self.USER_AGENTS),
-            "Origin": self.ORIGIN,
-            "Referer": self.ORIGIN + "/dashboard",
-        }
-
-        payload = {
-            "username": self.USERNAME,
-            "password": self.PASSWORD,
-        }
+        headers = self._headers()
+        payload = {"username": self.USERNAME, "password": self.PASSWORD}
 
         resp = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["signin"],
@@ -156,7 +159,9 @@ class IChancyAPI:
             headers=headers,
         )
 
-        data = resp.json()
+        data = self.safe_json(resp)
+        if not data:
+            return False, {}
 
         if data.get("result"):
             self.session_cookies = dict(self.scraper.cookies)
@@ -185,42 +190,37 @@ class IChancyAPI:
 
     # ================= API =================
 
-    @with_retry
-    def get_player_id(self, login: str):
-        payload = {
-            "page": 1,
-            "pageSize": 100,
-            "filter": {"login": login},
-        }
-
-        headers = {
+    def _headers(self):
+        return {
             "Content-Type": "application/json",
             "User-Agent": random.choice(self.USER_AGENTS),
             "Origin": self.ORIGIN,
             "Referer": self.ORIGIN + "/dashboard",
         }
 
+    @with_retry
+    def get_player_id(self, login: str):
+        payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
         resp = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["statistics"],
             json=payload,
-            headers=headers,
+            headers=self._headers(),
         )
 
-        records = resp.json().get("result", {}).get("records", [])
+        data = self.safe_json(resp)
+        if not data:
+            return None
+
+        records = data.get("result", {}).get("records", [])
         for r in records:
             if r.get("username") == login:
                 return r.get("playerId")
-
         return None
 
     @with_retry
     def create_player(self, login=None, password=None):
-        login = login or "u" + "".join(
-            random.choice(string.ascii_lowercase + string.digits) for _ in range(7)
-        )
-        password = password or "".join(
-            random.choice(string.ascii_letters + string.digits) for _ in range(10)
-        )
+        login = login or "u" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))
+        password = password or "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
         email = f"{login}@example.com"
 
         payload = {
@@ -232,19 +232,13 @@ class IChancyAPI:
             }
         }
 
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": random.choice(self.USER_AGENTS),
-            "Origin": self.ORIGIN,
-            "Referer": self.ORIGIN + "/dashboard",
-        }
-
         resp = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["create"],
             json=payload,
-            headers=headers,
+            headers=self._headers(),
         )
 
+        data = self.safe_json(resp)
         player_id = self.get_player_id(login)
 
         return {
@@ -253,7 +247,7 @@ class IChancyAPI:
             "password": password,
             "email": email,
             "player_id": player_id,
-            "raw": resp.json(),
+            "raw": data,
         }
 
     @with_retry
@@ -270,10 +264,10 @@ class IChancyAPI:
         resp = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["deposit"],
             json=payload,
-            headers=self._api_headers(),
+            headers=self._headers(),
         )
 
-        return resp.status_code, resp.json()
+        return resp.status_code, self.safe_json(resp)
 
     @with_retry
     def withdraw_from_player(self, player_id: str, amount: float):
@@ -289,10 +283,10 @@ class IChancyAPI:
         resp = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["withdraw"],
             json=payload,
-            headers=self._api_headers(),
+            headers=self._headers(),
         )
 
-        return resp.status_code, resp.json()
+        return resp.status_code, self.safe_json(resp)
 
     @with_retry
     def get_player_balance(self, player_id: str):
@@ -301,10 +295,10 @@ class IChancyAPI:
         resp = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["balance"],
             json=payload,
-            headers=self._api_headers(),
+            headers=self._headers(),
         )
 
-        data = resp.json()
+        data = self.safe_json(resp)
         balance = 0
         try:
             balance = data["result"][0]["balance"]
@@ -312,14 +306,6 @@ class IChancyAPI:
             pass
 
         return resp.status_code, balance, data
-
-    def _api_headers(self):
-        return {
-            "Content-Type": "application/json",
-            "User-Agent": random.choice(self.USER_AGENTS),
-            "Origin": self.ORIGIN,
-            "Referer": self.ORIGIN + "/dashboard",
-        }
 
     # ================= WATCHDOG =================
 
