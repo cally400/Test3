@@ -1,7 +1,7 @@
 from ichancy_api import IChancyAPI
 import ichancy_deposit
 import ichancy_withdraw
-import ichancy_create_account as ichancy_create
+from account_creation import start_create_account, handle_account_options
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os
@@ -220,9 +220,12 @@ def handle_back_main(call):
 # =========================
 # إنشاء حساب iChancy
 # =========================
-@bot.callback_query_handler(func=lambda c: c.data == "ichancy_create")
-def handle_ichancy_create(call):
-    ichancy_create.start_create_account(bot, call)
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    if call.data == 'create_account':
+        start_create_account(bot, call)
+    elif call.data in ['account_info', 'change_password', 'delete_account', 'new_account']:
+        handle_account_options(bot, call)
 # =========================
 # تعبئة حساب iChancy
 # =========================
