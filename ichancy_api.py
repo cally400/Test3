@@ -1,5 +1,4 @@
-
-#ichancy_api.py - النسخة المعدلة مع الإشعارات وإعادة الاتصال التلقائي
+# ichancy_api.py - النسخة المعدلة مع تقليل الرسائل
 
 import cloudscraper
 import random
@@ -14,7 +13,6 @@ from typing import Tuple, Dict, Optional, Union, Any
 import json
 from functools import wraps
 import hashlib
-import traceback
 
 class IChancyAPI:
     def __init__(self, telegram_bot_token=None, telegram_chat_id=None):
@@ -25,6 +23,15 @@ class IChancyAPI:
         self.TELEGRAM_BOT_TOKEN = telegram_bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "")
         self.TELEGRAM_CHAT_ID = telegram_chat_id or os.getenv("TELEGRAM_CHAT_ID", "-1003317405069")
         self.telegram_enabled = bool(self.TELEGRAM_BOT_TOKEN and self.TELEGRAM_CHAT_ID)
+        
+        # متغيرات التحكم في الإشعارات
+        self._last_notification_time = {}
+        self._notification_cooldown = {
+            'error': 300,      # 5 دقائق للأخطاء
+            'reconnect': 60,   # دقيقة واحدة لإعادة الاتصال
+            'status': 3600,    # ساعة واحدة للحالة
+            'success': 1800,   # 30 دقيقة للنجاحات
+        }
         
         # متغيرات الجلسة
         self.scraper = None
@@ -38,15 +45,15 @@ class IChancyAPI:
         self._auto_reconnect_thread = None
         self._stop_threads = threading.Event()
         self._retry_count = 0
-        self.max_retries = 10
+        self.max_retries = 5
         self.consecutive_failures = 0
         self.total_reconnects = 0
         self.start_time = datetime.now()
         
         # إعدادات التوقيت
-        self._session_refresh_interval = 1200  # 20 دقيقة
-        self._health_check_interval = 300  # 5 دقائق
-        self._auto_reconnect_check_interval = 30  # 30 ثانية
+        self._session_refresh_interval = 1200
+        self._health_check_interval = 300
+        self._auto_reconnect_check_interval = 60
         
         # الإحصائيات
         self.stats = {
@@ -60,18 +67,18 @@ class IChancyAPI:
         
         # بدء النظام
         self._init_scraper()
-        self._send_startup_notification()
+        if self.telegram_enabled:
+            self._send_startup_notification()
         
     def _setup_logging(self):
-        """تهيئة نظام التسجيل المتقدم"""
+        """تهيئة نظام التسجيل"""
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
         
         if not self.logger.handlers:
             handler = logging.StreamHandler()
             formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S'
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
             )
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
@@ -99,13 +106,21 @@ class IChancyAPI:
         )
         self.REFERER = self.ORIGIN + "/dashboard"
         
-        # إعدادات الجلسة
         self.SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT", "1800"))
-        self.MAX_SESSION_AGE = int(os.getenv("MAX_SESSION_AGE", "7200"))
-        self.HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "300"))
-        self.AUTO_RECONNECT_DELAY = int(os.getenv("AUTO_RECONNECT_DELAY", "10"))
 
-    # ========== نظام إشعارات التلغرام ==========
+    # ========== نظام إشعارات التلغرام مع تقليل ==========
+    
+    def _can_send_notification(self, notification_type: str) -> bool:
+        """التحقق من إمكانية إرسال الإشعار"""
+        now = time.time()
+        last_time = self._last_notification_time.get(notification_type, 0)
+        cooldown = self._notification_cooldown.get(notification_type, 60)
+        
+        if now - last_time < cooldown:
+            return False
+        
+        self._last_notification_time[notification_type] = now
+        return True
     
     def _send_telegram_message(self, message: str, parse_mode="HTML"):
         """إرسال رسالة إلى قناة التلغرام"""
@@ -122,14 +137,9 @@ class IChancyAPI:
             }
             
             response = requests.post(url, json=payload, timeout=10)
-            if response.status_code == 200:
-                return True
-            else:
-                self.logger.error(f"فشل إرسال رسالة التلغرام: {response.text}")
-                return False
+            return response.status_code == 200
                 
-        except Exception as e:
-            self.logger.error(f"خطأ في إرسال رسالة التلغرام: {str(e)}")
+        except Exception:
             return False
     
     def _send_startup_notification(self):
@@ -146,84 +156,61 @@ class IChancyAPI:
         """
         self._send_telegram_message(message)
     
-    def _send_session_notification(self, event_type: str, details: str = ""):
-        """إرسال إشعار حالة الجلسة"""
+    def _send_important_notification(self, event_type: str, details: str = ""):
+        """إرسال إشعار مهم فقط (مع تقليل التكرار)"""
+        if not self._can_send_notification('status'):
+            return
+        
         session_info = self.get_session_info()
         
         emoji = "✅"
         if "error" in event_type.lower() or "fail" in event_type.lower():
             emoji = "❌"
-        elif "reconnect" in event_type.lower() or "retry" in event_type.lower():
+        elif "reconnect" in event_type.lower():
             emoji = "🔄"
         elif "warning" in event_type.lower():
             emoji = "⚠️"
-        elif "expired" in event_type.lower():
-            emoji = "⏰"
         
         message = f"""
 {emoji} <b>{event_type}</b>
 ━━━━━━━━━━━━━━━━━━
-🆔 <b>معرف الجلسة:</b> {session_info.get('session_id', 'N/A')}
+🆔 <b>معرف الجلسة:</b> {session_info.get('session_id', 'N/A')[:8]}
 🔐 <b>الحالة:</b> {'✅ متصل' if session_info.get('is_logged_in') else '❌ منقطع'}
-⏰ <b>الصلاحية حتى:</b> {session_info.get('session_expiry', 'N/A')}
-🔄 <b>عدد إعادة الاتصال:</b> {self.total_reconnects}
+🔄 <b>إعادة الاتصال:</b> {self.total_reconnects}
 📊 <b>معدل النجاح:</b> {self._calculate_success_rate()}%
 ━━━━━━━━━━━━━━━━━━
 📝 <b>التفاصيل:</b>
-{details}
+{details[:100]}
         """
         self._send_telegram_message(message)
     
     def _send_error_notification(self, error_message: str, function_name: str = ""):
-        """إرسال إشعار خطأ"""
+        """إرسال إشعار خطأ مهم فقط"""
+        if not self._can_send_notification('error'):
+            return
+        
         message = f"""
 🚨 <b>خطأ في النظام</b>
 ━━━━━━━━━━━━━━━━━━
-📅 <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}
+🕒 <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}
 ⚙️ <b>الدالة:</b> {function_name}
-❌ <b>الخطأ:</b> {error_message[:200]}
-🔄 <b>المحاولات الفاشلة:</b> {self.consecutive_failures}
+❌ <b>الخطأ:</b> {error_message[:100]}
+🔄 <b>المحاولات:</b> {self.consecutive_failures}
 ━━━━━━━━━━━━━━━━━━
-<i>جاري محاولة الإصلاح التلقائي...</i>
+<i>جاري الإصلاح التلقائي...</i>
         """
         self._send_telegram_message(message)
     
-    def _send_reconnect_notification(self, attempt: int, max_attempts: int, delay: int):
-        """إرسال إشعار إعادة الاتصال"""
-        message = f"""
-🔄 <b>محاولة إعادة اتصال</b>
-━━━━━━━━━━━━━━━━━━
-🎯 <b>المحاولة:</b> {attempt}/{max_attempts}
-⏳ <b>الانتظار:</b> {delay} ثانية
-📊 <b>الإجمالي:</b> {self.total_reconnects} عملية إعادة اتصال
-🔗 <b>الحالة:</b> جاري إعادة الاتصال...
-━━━━━━━━━━━━━━━━━━
-<i>سيتم إعلامك عند النجاح</i>
-        """
-        self._send_telegram_message(message)
-    
-    def _send_success_notification(self, operation: str, details: str = ""):
-        """إرسال إشعار نجاح"""
-        message = f"""
-✅ <b>{operation} - ناجح</b>
-━━━━━━━━━━━━━━━━━━
-📅 <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}
-🔄 <b>عدد العمليات:</b> {self.stats['operations_count']}
-⏰ <b>مدة التشغيل:</b> {self._get_uptime()}
-📊 <b>معدل النجاح:</b> {self._calculate_success_rate()}%
-━━━━━━━━━━━━━━━━━━
-📝 <b>التفاصيل:</b>
-{details}
-        """
-        self._send_telegram_message(message)
-    
-    def _send_daily_report(self):
-        """إرسال تقرير يومي"""
+    def _send_daily_summary(self):
+        """إرسال ملخص يومي فقط"""
+        if not self._can_send_notification('status'):
+            return
+        
         uptime = self._get_uptime()
         success_rate = self._calculate_success_rate()
         
         message = f"""
-📊 <b>تقرير أداء يومي</b>
+📊 <b>ملخص أداء النظام</b>
 ━━━━━━━━━━━━━━━━━━
 📅 <b>التاريخ:</b> {datetime.now().strftime('%Y-%m-%d')}
 ⏰ <b>مدة التشغيل:</b> {uptime}
@@ -231,7 +218,7 @@ class IChancyAPI:
 ❌ <b>فشل الدخول:</b> {self.stats['failed_logins']}
 🔗 <b>إعادة الاتصال:</b> {self.total_reconnects}
 📈 <b>معدل النجاح:</b> {success_rate}%
-🔐 <b>الحالة الحالية:</b> {'✅ نشط' if self.is_logged_in else '❌ غير نشط'}
+🔐 <b>الحالة:</b> {'✅ نشط' if self.is_logged_in else '❌ غير نشط'}
 ━━━━━━━━━━━━━━━━━━
 <i>النظام يعمل بشكل طبيعي</i>
         """
@@ -262,7 +249,7 @@ class IChancyAPI:
         else:
             return f"{minutes} دقيقة"
     
-    # ========== نظام إعادة الاتصال التلقائي ==========
+    # ========== نظام إعادة الاتصال التلقائي المبسط ==========
     
     def _start_auto_reconnect(self):
         """بدء نظام إعادة الاتصال التلقائي"""
@@ -286,84 +273,65 @@ class IChancyAPI:
                 
                 # التحقق من حالة الاتصال
                 if not self.is_logged_in or not self._perform_health_check():
-                    self.logger.warning("🔌 فقدان الاتصال، بدء إعادة الاتصال التلقائي...")
                     self.consecutive_failures += 1
                     
-                    # إرسال إشعار الفشل
-                    self._send_session_notification(
-                        "فقدان الاتصال",
-                        f"المحاولات الفاشلة المتتالية: {self.consecutive_failures}"
-                    )
+                    # إرسال إشعار فقط بعد عدة محاولات فاشلة
+                    if self.consecutive_failures >= 3 and self._can_send_notification('reconnect'):
+                        self._send_important_notification(
+                            "محاولة إعادة اتصال",
+                            f"المحاولات الفاشلة: {self.consecutive_failures}"
+                        )
                     
                     # محاولة إعادة الاتصال
-                    if self._smart_reconnect():
+                    if self._simple_reconnect():
                         self.consecutive_failures = 0
                         self.total_reconnects += 1
-                        self._send_session_notification(
-                            "تم استعادة الاتصال",
-                            f"تمت إعادة الاتصال بعد {self.consecutive_failures} محاولات فاشلة"
-                        )
+                        
+                        # إشعار النجاح مرة واحدة فقط
+                        if self._can_send_notification('success'):
+                            self._send_important_notification(
+                                "تم استعادة الاتصال",
+                                f"بعد {self.total_reconnects} محاولات"
+                            )
                     else:
-                        # زيادة تأخير المحاولة التالية
-                        extra_delay = min(self.consecutive_failures * 30, 300)
-                        self.logger.info(f"⏳ زيادة التأخير إلى {extra_delay} ثانية")
+                        # زيادة التأخير
+                        extra_delay = min(self.consecutive_failures * 10, 120)
                         time.sleep(extra_delay)
                 
-                # إرسال تقرير يومي في منتصف الليل
-                if datetime.now().hour == 0 and datetime.now().minute < 5:
-                    self._send_daily_report()
-                    time.sleep(300)  # تأخير 5 دقائق لتجنب التكرار
+                # إرسال ملخص يومي في منتصف الليل
+                current_time = datetime.now()
+                if current_time.hour == 0 and current_time.minute < 5:
+                    self._send_daily_summary()
+                    time.sleep(300)  # تأخير 5 دقائق
                     
             except Exception as e:
-                self.logger.error(f"❌ خطأ في حلقة إعادة الاتصال: {str(e)}")
+                self.logger.error(f"خطأ في حلقة إعادة الاتصال: {str(e)}")
                 time.sleep(60)
     
-    def _smart_reconnect(self, max_attempts=5):
-        """إعادة اتصال ذكية مع محاولات متعددة"""
+    def _simple_reconnect(self, max_attempts=3):
+        """إعادة اتصال مبسطة"""
         for attempt in range(1, max_attempts + 1):
             try:
-                # إرسال إشعار المحاولة
-                delay = self._calculate_reconnect_delay(attempt)
-                self._send_reconnect_notification(attempt, max_attempts, delay)
-                
                 # الانتظار قبل المحاولة
-                time.sleep(delay)
+                time.sleep(2 ** attempt)  # تأخير متزايد
                 
-                # إعادة تهيئة السكرابر
+                # إعادة تهيئة
                 self.scraper = None
                 self.session_cookies = {}
                 self.is_logged_in = False
                 
-                # محاولة تسجيل دخول جديد
-                self.logger.info(f"🔄 محاولة إعادة اتصال {attempt}/{max_attempts}")
-                
-                success, data = self.login(max_retries=3)
+                # محاولة تسجيل دخول
+                success, _ = self.login(max_retries=2)
                 
                 if success:
-                    self.logger.info(f"✅ نجحت إعادة الاتصال في المحاولة {attempt}")
-                    self.stats['last_success'] = datetime.now().strftime('%H:%M:%S')
                     return True
-                else:
-                    error_msg = data.get('error', 'خطأ غير معروف')
-                    self.logger.warning(f"⚠️  فشلت محاولة {attempt}: {error_msg}")
                     
-                    # تغيير User-Agent للمحاولة التالية
-                    self._rotate_user_agent()
-                    
-            except Exception as e:
-                self.logger.error(f"❌ خطأ في محاولة إعادة الاتصال {attempt}: {str(e)}")
+            except Exception:
+                continue
         
-        # فشلت جميع المحاولات
-        self.logger.error("❌ فشلت جميع محاولات إعادة الاتصال")
         return False
     
-    def _calculate_reconnect_delay(self, attempt):
-        """حساب تأخير إعادة الاتصال"""
-        # تأخير تصاعدي: 5, 15, 30, 60, 120 ثانية
-        delays = [5, 15, 30, 60, 120]
-        return delays[min(attempt - 1, len(delays) - 1)]
-    
-    # ========== نظام ضربات القلب المحسن ==========
+    # ========== نظام ضربات القلب المبسط ==========
     
     def _start_heartbeat(self):
         """بدء نظام ضربات القلب"""
@@ -382,41 +350,32 @@ class IChancyAPI:
         """حلقة ضربات القلب"""
         while not self._stop_threads.is_set():
             try:
-                time.sleep(self.HEARTBEAT_INTERVAL)
+                time.sleep(self._health_check_interval)
                 
                 if self.is_logged_in:
                     # إجراء فحص صحي
                     if self._perform_health_check():
                         # تحديث وقت انتهاء الصلاحية
                         self.session_expiry = datetime.now() + timedelta(seconds=self.SESSION_TIMEOUT)
-                        self.logger.debug("✅ فحص صحي ناجح")
-                        
-                        # التحقق من تجديد الجلسة
-                        if self._is_session_expired():
-                            self.logger.info("🔄 جلسة منتهية، جاري التجديد...")
-                            self._refresh_session()
                     else:
-                        self.logger.warning("⚠️  فحص صحي فاشل")
                         self.is_logged_in = False
                         
-            except Exception as e:
-                self.logger.error(f"❌ خطأ في حلقة ضربات القلب: {str(e)}")
+            except Exception:
                 time.sleep(60)
     
-    # ========== الدوال الأساسية المعدلة ==========
+    # ========== الدوال الأساسية ==========
     
     def _init_scraper(self):
-        """تهيئة السكرابر مع بدء الأنظمة المساعدة"""
+        """تهيئة السكرابر"""
         with self._session_lock:
             try:
                 self.scraper = cloudscraper.create_scraper(
                     browser={
                         'browser': 'chrome',
                         'platform': 'windows',
-                        'mobile': False,
-                        'desktop': True
+                        'mobile': False
                     },
-                    delay=10
+                    delay=5
                 )
                 
                 self.scraper.timeout = 30
@@ -428,12 +387,20 @@ class IChancyAPI:
                 return True
                     
             except Exception as e:
-                self.logger.error(f"❌ فشل في تهيئة السكرابر: {str(e)}")
-                self._send_error_notification(str(e), "_init_scraper")
+                self.logger.error(f"فشل في تهيئة السكرابر: {str(e)}")
                 return False
     
+    def _get_headers(self):
+        """الحصول على هيدرات الطلب"""
+        return {
+            "Content-Type": "application/json",
+            "User-Agent": self.USER_AGENT,
+            "Origin": self.ORIGIN,
+            "Referer": self.REFERER
+        }
+    
     def login(self, max_retries=None):
-        """تسجيل دخول مع تتبع الإحصائيات"""
+        """تسجيل دخول"""
         max_retries = max_retries or self.max_retries
         self.stats['total_logins'] += 1
         
@@ -447,7 +414,7 @@ class IChancyAPI:
                     "password": self.PASSWORD
                 }
 
-                self.logger.info(f"🔐 محاولة تسجيل دخول {attempt + 1}/{max_retries}")
+                self.logger.info(f"محاولة تسجيل دخول {attempt + 1}/{max_retries}")
                 
                 resp = self.scraper.post(
                     self.ORIGIN + self.ENDPOINTS['signin'],
@@ -464,85 +431,93 @@ class IChancyAPI:
                     self.session_expiry = datetime.now() + timedelta(seconds=self.SESSION_TIMEOUT)
                     self.last_login_time = datetime.now()
                     self.is_logged_in = True
+                    
+                    # إنشاء معرف الجلسة
                     self._generate_session_id()
                     
-                    self.logger.info("✅ تم تسجيل الدخول بنجاح")
-                    
-                    # إرسال إشعار النجاح
-                    self._send_session_notification(
-                        "تسجيل دخول ناجح",
-                        f"المحاولة: {attempt + 1}\nمعرف الجلسة: {self.session_id}"
-                    )
+                    self.logger.info("تم تسجيل الدخول بنجاح")
                     
                     self._retry_count = 0
                     self.consecutive_failures = 0
                     
                     return True, data
                 else:
-                    error_msg = data.get("notification", [{}])[0].get("content", "فشل تسجيل الدخول")
-                    self.logger.warning(f"⚠️  فشل تسجيل دخول: {error_msg}")
                     self.stats['failed_logins'] += 1
                     
                     if attempt < max_retries - 1:
-                        self._smart_login_retry(attempt)
+                        time.sleep(2 ** attempt)
                         continue
-                    
-                    # إرسال إشعار الفشل
-                    self._send_session_notification(
-                        "فشل تسجيل دخول",
-                        f"الخطأ: {error_msg}\nالمحاولة: {attempt + 1}/{max_retries}"
-                    )
                     
                     return False, data
 
             except Exception as e:
-                self.logger.error(f"❌ خطأ في تسجيل الدخول (محاولة {attempt + 1}): {str(e)}")
+                self.logger.error(f"خطأ في تسجيل الدخول: {str(e)}")
                 self.stats['failed_logins'] += 1
                 self.stats['last_error'] = str(e)
                 
                 if attempt < max_retries - 1:
-                    self._smart_login_retry(attempt)
+                    time.sleep(2 ** attempt)
                 else:
                     self._retry_count += 1
-                    self._send_error_notification(str(e), "login")
                     return False, {"error": str(e)}
         
         return False, {"error": "تجاوز الحد الأقصى لمحاولات تسجيل الدخول"}
     
+    def _generate_session_id(self):
+        """إنشاء معرف فريد للجلسة"""
+        if not self.session_cookies:
+            self.session_id = None
+            return
+            
+        cookies_str = str(self.session_cookies)
+        timestamp = datetime.now().isoformat()
+        hash_input = f"{cookies_str}{timestamp}{self.USERNAME}"
+        
+        self.session_id = hashlib.md5(hash_input.encode()).hexdigest()[:8]
+    
     def ensure_login(self):
-        """التأكد من تسجيل الدخول مع إعادة الاتصال التلقائي"""
+        """التأكد من تسجيل الدخول"""
         with self._session_lock:
             # التحقق من الجلسة الحالية
             if (self.is_logged_in and 
                 self.scraper and 
-                self._is_session_valid() and 
-                not self._is_session_expired()):
+                self._is_session_valid()):
                 
-                self.logger.debug("✅ الجلسة سارية وصالحة")
                 return True
             
-            self.logger.info("🔄 محاولة تأسيس/استعادة الجلسة...")
+            self.logger.info("محاولة تأسيس/استعادة الجلسة...")
             
             # محاولة تسجيل دخول جديد
             success, data = self.login()
             
             if not success:
-                error_msg = data.get("error", data.get("notification", [{}])[0].get("content", "فشل تسجيل الدخول"))
-                self.logger.error(f"❌ فشل في تأسيس الجلسة: {error_msg}")
+                error_msg = data.get("error", "فشل تسجيل الدخول")
+                self.logger.error(f"فشل في تأسيس الجلسة: {error_msg}")
                 
-                # إرسال إشعار الفشل
-                self._send_session_notification(
-                    "فشل تأسيس الجلسة",
-                    f"الخطأ: {error_msg}\nسيتم المحاولة تلقائياً"
-                )
+                # إرسال إشعار خطأ مهم فقط
+                if self._can_send_notification('error'):
+                    self._send_error_notification(error_msg, "ensure_login")
                 
-                # نظام إعادة الاتصال التلقائي سيتولى المهمة
                 return False
+            
+            # إرسال إشعار نجاح مهم فقط
+            if self._can_send_notification('success'):
+                self._send_important_notification("تأسيس الجلسة", "تم بنجاح")
             
             return True
     
+    def _is_session_valid(self):
+        """التحقق من صلاحية الجلسة"""
+        if not self.session_cookies or not self.session_expiry:
+            return False
+            
+        if datetime.now() >= self.session_expiry:
+            return False
+                
+        return True
+    
     def _perform_health_check(self):
-        """فحص صحي مع إرسال إشعارات"""
+        """فحص صحي مبسط"""
         try:
             if not self.scraper or not self.is_logged_in:
                 return False
@@ -553,94 +528,31 @@ class IChancyAPI:
                 self.ORIGIN + self.ENDPOINTS['statistics'],
                 json=payload,
                 headers=self._get_headers(),
-                timeout=15
+                timeout=10
             )
             
-            is_healthy = resp.status_code == 200 and 'result' in resp.text
+            return resp.status_code == 200
             
-            if not is_healthy:
-                self.logger.warning(f"⚠️  فحص صحي فاشل: {resp.status_code}")
-                self._send_session_notification(
-                    "فحص صحي فاشل",
-                    f"كود الحالة: {resp.status_code}"
-                )
-            
-            return is_healthy
-            
-        except Exception as e:
-            self.logger.debug(f"فحص صحي فاشل: {str(e)}")
+        except Exception:
             return False
     
-    def _refresh_session(self):
-        """تجديد الجلسة مع إشعارات"""
-        try:
-            if self._perform_health_check():
-                self.session_expiry = datetime.now() + timedelta(seconds=self.SESSION_TIMEOUT)
-                self.logger.info(f"✅ تم تجديد الجلسة حتى: {self.session_expiry.strftime('%H:%M:%S')}")
-                return True
-            else:
-                self.logger.info("🔄 جلسة منتهية، جاري تسجيل دخول جديد...")
-                self._send_session_notification("انتهت صلاحية الجلسة", "جاري التجديد...")
-                return self.login()[0]
-                
-        except Exception as e:
-            self.logger.error(f"❌ فشل في تجديد الجلسة: {str(e)}")
-            self._send_error_notification(str(e), "_refresh_session")
-            return False
-    
-    # ========== decorator معدل مع إشعارات ==========
+    # ========== decorator مبسط ==========
     
     def with_retry(func):
-        """مُعدِّل محسن مع تتبع الإحصائيات"""
+        """مُعدِّل لإعادة المحاولة"""
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            self.stats['operations_count'] += 1
-            function_name = func.__name__
-            
-            for attempt in range(3):
+            for attempt in range(2):  # محاولتان فقط
                 try:
                     self.ensure_login()
-                    
-                    result = func(self, *args, **kwargs)
-                    
-                    if result is None:
-                        continue
-                    
-                    # التحقق من وجود مشاكل
-                    if isinstance(result, tuple) and len(result) >= 2:
-                        status, data = result[0], result[1]
-                        
-                        if status == 403 or (isinstance(data, dict) and any(
-                            keyword in str(data).lower() 
-                            for keyword in ['captcha', 'cloudflare', 'security', 'block']
-                        )):
-                            self.logger.warning(f"⚠️  مشكلة أمان في {function_name}")
-                            
-                            if attempt < 2:
-                                self._rotate_user_agent()
-                                time.sleep(2 ** attempt)
-                                self.is_logged_in = False
-                                continue
-                    
-                    # إرسال إشعار نجاح للعمليات المهمة
-                    if function_name in ['deposit_to_player', 'withdraw_from_player', 'create_player']:
-                        details = f"{function_name} - نجاح"
-                        if len(args) > 0:
-                            details += f"\nالمعامل: {args[0]}"
-                        self._send_success_notification(function_name, details)
-                    
-                    return result
-                    
+                    return func(self, *args, **kwargs)
                 except Exception as e:
-                    self.logger.error(f"❌ خطأ في {function_name} (محاولة {attempt + 1}): {str(e)}")
-                    self._send_error_notification(str(e), function_name)
-                    
-                    if attempt < 2:
-                        time.sleep(2 ** attempt)
+                    self.logger.error(f"خطأ في {func.__name__}: {str(e)}")
+                    if attempt == 0:
+                        time.sleep(2)
                         self.is_logged_in = False
                     else:
                         return None, {"error": str(e)}
-            
             return None, {"error": "فشل بعد عدة محاولات"}
         return wrapper
     
@@ -655,46 +567,43 @@ class IChancyAPI:
         return {
             "is_logged_in": self.is_logged_in,
             "session_id": self.session_id,
-            "session_expiry": self.session_expiry.strftime("%Y-%m-%d %H:%M:%S") if self.session_expiry else None,
+            "session_expiry": self.session_expiry.strftime("%H:%M:%S") if self.session_expiry else None,
             "session_age": session_age,
             "consecutive_failures": self.consecutive_failures,
             "total_reconnects": self.total_reconnects,
             "uptime": self._get_uptime(),
-            "success_rate": self._calculate_success_rate(),
-            "stats": self.stats
+            "success_rate": self._calculate_success_rate()
         }
     
     def send_status_report(self):
         """إرسال تقرير حالة يدوي"""
+        if not self._can_send_notification('status'):
+            return "يجب الانتظار قبل إرسال تقرير آخر"
+        
         session_info = self.get_session_info()
         
         message = f"""
 📋 <b>تقرير حالة يدوي</b>
 ━━━━━━━━━━━━━━━━━━
-🕒 <b>الوقت:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🕒 <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}
 🔐 <b>حالة الدخول:</b> {'✅ متصل' if session_info['is_logged_in'] else '❌ منقطع'}
 🆔 <b>معرف الجلسة:</b> {session_info['session_id'] or 'N/A'}
-⏰ <b>عمر الجلسة:</b> {session_info['session_age'] or 'N/A'}
 ⏳ <b>مدة التشغيل:</b> {session_info['uptime']}
 🔄 <b>إعادة الاتصال:</b> {session_info['total_reconnects']}
 📊 <b>معدل النجاح:</b> {session_info['success_rate']}%
 ━━━━━━━━━━━━━━━━━━
-📈 <b>الإحصائيات:</b>
-• عمليات الدخول: {session_info['stats']['total_logins']}
-• فشل الدخول: {session_info['stats']['failed_logins']}
-• العمليات: {session_info['stats']['operations_count']}
-━━━━━━━━━━━━━━━━━━
         """
         self._send_telegram_message(message)
-        return message
+        return "تم إرسال التقرير"
     
     def stop(self):
-        """إيقاف النظام بأمان"""
+        """إيقاف النظام"""
         self.logger.info("🛑 إيقاف النظام...")
         
-        # إرسال إشعار الإيقاف
-        uptime = self._get_uptime()
-        stop_message = f"""
+        # إرسال إشعار إيقاف مهم فقط
+        if self.telegram_enabled and self._can_send_notification('status'):
+            uptime = self._get_uptime()
+            stop_message = f"""
 🛑 <b>إيقاف النظام</b>
 ━━━━━━━━━━━━━━━━━━
 🕒 <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}
@@ -702,18 +611,17 @@ class IChancyAPI:
 🔄 <b>إعادة الاتصال:</b> {self.total_reconnects}
 📊 <b>معدل النجاح:</b> {self._calculate_success_rate()}%
 ━━━━━━━━━━━━━━━━━━
-<i>تم إيقاف النظام بنجاح</i>
-        """
-        self._send_telegram_message(stop_message)
+            """
+            self._send_telegram_message(stop_message)
         
         # إيقاف الخيوط
         self._stop_threads.set()
         
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            self._heartbeat_thread.join(timeout=5)
+            self._heartbeat_thread.join(timeout=3)
         
         if self._auto_reconnect_thread and self._auto_reconnect_thread.is_alive():
-            self._auto_reconnect_thread.join(timeout=5)
+            self._auto_reconnect_thread.join(timeout=3)
         
         # تنظيف الموارد
         self.is_logged_in = False
@@ -722,410 +630,245 @@ class IChancyAPI:
         self.session_id = None
         self.scraper = None
         
-        self.logger.info("✅ تم إيقاف النظام بنجاح")
-    # ========== دوال API الأصلية (معدلة قليلاً) ==========
-@with_retry
-def create_player(self, login=None, password=None) -> Tuple[int, dict, str, str, Optional[str]]:
-    """إنشاء لاعب جديد"""
-    login = login or "u" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))
-    password = password or "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
-    email = f"{login}@example.com"
+        self.logger.info("✅ تم إيقاف النظام")
+    
+    # ========== دوال API الأساسية ==========
+    
+    @with_retry
+    def create_player(self, login=None, password=None) -> Tuple[int, dict, str, str, Optional[str]]:
+        """إنشاء لاعب جديد"""
+        login = login or "u" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))
+        password = password or "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
+        email = f"{login}@example.com"
 
-    payload = {
-        "player": {
-            "email": email,
-            "password": password,
-            "parentId": self.PARENT_ID,
-            "login": login
+        payload = {
+            "player": {
+                "email": email,
+                "password": password,
+                "parentId": self.PARENT_ID,
+                "login": login
+            }
         }
-    }
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['create'],
-        json=payload,
-        headers=self._get_headers()
-    )
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['create'],
+            json=payload,
+            headers=self._get_headers()
+        )
 
-    try:
-        data = resp.json()
-        player_id = self.get_player_id(login)
-        return resp.status_code, data, login, password, player_id
-    except Exception:
-        return resp.status_code, {}, login, password, None
+        try:
+            data = resp.json()
+            player_id = self.get_player_id(login)
+            return resp.status_code, data, login, password, player_id
+        except Exception:
+            return resp.status_code, {}, login, password, None
 
-@with_retry
-def get_player_id(self, login: str) -> Optional[str]:
-    """الحصول على معرف اللاعب"""
-    payload = {
-        "page": 1,
-        "pageSize": 100,
-        "filter": {"login": login}
-    }
-
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['statistics'],
-        json=payload,
-        headers=self._get_headers()
-    )
-
-    try:
-        data = resp.json()
-        records = data.get("result", {}).get("records", [])
-        for record in records:
-            if record.get("username") == login:
-                return record.get("playerId")
-    except Exception:
-        pass
-    return None
-
-@with_retry
-def create_player_with_credentials(self, login: str, password: str) -> Tuple[int, dict, Optional[str], str]:
-    """إنشاء لاعب ببيانات محددة"""
-    email = f"{login}@agint.nsp"
-    # التأكد من تفرد الإيميل
-    suffix = 1
-    while self.check_email_exists(email):
-        email = f"{login}_{suffix}@agint.nsp"
-        suffix += 1
-
-    payload = {
-        "player": {
-            "email": email,
-            "password": password,
-            "parentId": self.PARENT_ID,
-            "login": login
+    @with_retry
+    def get_player_id(self, login: str) -> Optional[str]:
+        """الحصول على معرف اللاعب"""
+        payload = {
+            "page": 1,
+            "pageSize": 100,
+            "filter": {"login": login}
         }
-    }
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['create'],
-        json=payload,
-        headers=self._get_headers()
-    )
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=self._get_headers()
+        )
 
-    try:
-        data = resp.json()
-        player_id = self.get_player_id(login)
-        return resp.status_code, data, player_id, email
-    except Exception:
-        return resp.status_code, {}, None, email
+        try:
+            data = resp.json()
+            records = data.get("result", {}).get("records", [])
+            for record in records:
+                if record.get("username") == login:
+                    return record.get("playerId")
+        except Exception:
+            pass
+        return None
 
-@with_retry
-def check_email_exists(self, email: str) -> bool:
-    """التحقق من وجود إيميل"""
-    payload = {
-        "page": 1,
-        "pageSize": 100,
-        "filter": {"email": email}
-    }
+    @with_retry
+    def create_player_with_credentials(self, login: str, password: str) -> Tuple[int, dict, Optional[str], str]:
+        """إنشاء لاعب ببيانات محددة"""
+        email = f"{login}@agint.nsp"
+        suffix = 1
+        while self.check_email_exists(email):
+            email = f"{login}_{suffix}@agint.nsp"
+            suffix += 1
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['statistics'],
-        json=payload,
-        headers=self._get_headers()
-    )
+        payload = {
+            "player": {
+                "email": email,
+                "password": password,
+                "parentId": self.PARENT_ID,
+                "login": login
+            }
+        }
 
-    try:
-        data = resp.json()
-        records = data.get("result", {}).get("records", [])
-        return any(record.get("email") == email for record in records)
-    except Exception:
-        return False
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['create'],
+            json=payload,
+            headers=self._get_headers()
+        )
 
-@with_retry
-def check_player_exists(self, login: str) -> bool:
-    """التحقق من وجود لاعب"""
-    payload = {
-        "page": 1,
-        "pageSize": 100,
-        "filter": {"login": login}
-    }
+        try:
+            data = resp.json()
+            player_id = self.get_player_id(login)
+            return resp.status_code, data, player_id, email
+        except Exception:
+            return resp.status_code, {}, None, email
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['statistics'],
-        json=payload,
-        headers=self._get_headers()
-    )
+    @with_retry
+    def check_email_exists(self, email: str) -> bool:
+        """التحقق من وجود إيميل"""
+        payload = {
+            "page": 1,
+            "pageSize": 100,
+            "filter": {"email": email}
+        }
 
-    try:
-        data = resp.json()
-        records = data.get("result", {}).get("records", [])
-        return any(record.get("username") == login for record in records)
-    except Exception:
-        return False
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=self._get_headers()
+        )
 
-@with_retry
-def deposit_to_player(self, player_id: str, amount: float) -> Tuple[int, dict]:
-    """إيداع رصيد للاعب"""
-    payload = {
-        "amount": amount,
-        "comment": "Deposit from API",
-        "playerId": player_id,
-        "currencyCode": "NSP",
-        "currency": "NSP",
-        "moneyStatus": 5
-    }
+        try:
+            data = resp.json()
+            records = data.get("result", {}).get("records", [])
+            return any(record.get("email") == email for record in records)
+        except Exception:
+            return False
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['deposit'],
-        json=payload,
-        headers=self._get_headers()
-    )
+    @with_retry
+    def check_player_exists(self, login: str) -> bool:
+        """التحقق من وجود لاعب"""
+        payload = {
+            "page": 1,
+            "pageSize": 100,
+            "filter": {"login": login}
+        }
 
-    try:
-        data = resp.json()
-        return resp.status_code, data
-    except Exception:
-        return resp.status_code, {}
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=self._get_headers()
+        )
 
-@with_retry
-def withdraw_from_player(self, player_id: str, amount: float) -> Tuple[int, dict]:
-    """سحب رصيد من اللاعب"""
-    payload = {
-        "amount": amount,
-        "comment": "Withdrawal from API",
-        "playerId": player_id,
-        "currencyCode": "NSP",
-        "currency": "NSP",
-        "moneyStatus": 5
-    }
+        try:
+            data = resp.json()
+            records = data.get("result", {}).get("records", [])
+            return any(record.get("username") == login for record in records)
+        except Exception:
+            return False
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['withdraw'],
-        json=payload,
-        headers=self._get_headers()
-    )
+    @with_retry
+    def deposit_to_player(self, player_id: str, amount: float) -> Tuple[int, dict]:
+        """إيداع رصيد للاعب"""
+        payload = {
+            "amount": amount,
+            "comment": "Deposit from API",
+            "playerId": player_id,
+            "currencyCode": "NSP",
+            "currency": "NSP",
+            "moneyStatus": 5
+        }
 
-    try:
-        data = resp.json()
-        return resp.status_code, data
-    except Exception:
-        return resp.status_code, {}
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['deposit'],
+            json=payload,
+            headers=self._get_headers()
+        )
 
-@with_retry
-def get_player_balance(self, player_id: str) -> Tuple[int, dict, float]:
-    """الحصول على رصيد اللاعب"""
-    payload = {"playerId": str(player_id)}
+        try:
+            data = resp.json()
+            return resp.status_code, data
+        except Exception:
+            return resp.status_code, {}
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['balance'],
-        json=payload,
-        headers=self._get_headers()
-    )
+    @with_retry
+    def withdraw_from_player(self, player_id: str, amount: float) -> Tuple[int, dict]:
+        """سحب رصيد من اللاعب"""
+        payload = {
+            "amount": amount,
+            "comment": "Withdrawal from API",
+            "playerId": player_id,
+            "currencyCode": "NSP",
+            "currency": "NSP",
+            "moneyStatus": 5
+        }
 
-    try:
-        data = resp.json()
-        results = data.get("result", [])
-        balance = results[0].get("balance", 0) if isinstance(results, list) and results else 0
-        return resp.status_code, data, balance
-    except Exception:
-        return resp.status_code, {}, 0
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['withdraw'],
+            json=payload,
+            headers=self._get_headers()
+        )
 
-@with_retry
-def get_all_players(self) -> list:
-    """الحصول على جميع اللاعبين"""
-    payload = {
-        "page": 1,
-        "pageSize": 100,
-        "filter": {}
-    }
+        try:
+            data = resp.json()
+            return resp.status_code, data
+        except Exception:
+            return resp.status_code, {}
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['statistics'],
-        json=payload,
-        headers=self._get_headers()
-    )
+    @with_retry
+    def get_player_balance(self, player_id: str) -> Tuple[int, dict, float]:
+        """الحصول على رصيد اللاعب"""
+        payload = {"playerId": str(player_id)}
 
-    try:
-        data = resp.json()
-        return data.get("result", {}).get("records", [])
-    except Exception:
-        return []
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['balance'],
+            json=payload,
+            headers=self._get_headers()
+        )
 
-@with_retry
-def search_players(self, search_term: str, page: int = 1, page_size: int = 50) -> dict:
-    """بحث عن لاعبين"""
-    payload = {
-        "page": page,
-        "pageSize": page_size,
-        "filter": {"search": search_term}
-    }
+        try:
+            data = resp.json()
+            results = data.get("result", [])
+            balance = results[0].get("balance", 0) if isinstance(results, list) and results else 0
+            return resp.status_code, data, balance
+        except Exception:
+            return resp.status_code, {}, 0
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['statistics'],
-        json=payload,
-        headers=self._get_headers()
-    )
+    @with_retry
+    def get_all_players(self) -> list:
+        """الحصول على جميع اللاعبين"""
+        payload = {
+            "page": 1,
+            "pageSize": 100,
+            "filter": {}
+        }
 
-    try:
-        data = resp.json()
-        return data
-    except Exception:
-        return {}
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=self._get_headers()
+        )
 
-@with_retry
-def get_player_details(self, player_id: str) -> dict:
-    """الحصول على تفاصيل لاعب"""
-    payload = {
-        "page": 1,
-        "pageSize": 10,
-        "filter": {"playerId": player_id}
-    }
+        try:
+            data = resp.json()
+            return data.get("result", {}).get("records", [])
+        except Exception:
+            return []
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS['statistics'],
-        json=payload,
-        headers=self._get_headers()
-    )
-
-    try:
-        data = resp.json()
-        records = data.get("result", {}).get("records", [])
-        return records[0] if records else {}
-    except Exception:
-        return {}
-
-@with_retry
-def update_player_password(self, player_id: str, new_password: str) -> Tuple[int, dict]:
-    """تحديث كلمة مرور اللاعب"""
-    # ملاحظة: تحتاج إلى التحقق من وجود نهاية point لهذه العملية في API
-    payload = {
-        "playerId": player_id,
-        "newPassword": new_password
-    }
-
-    # قد تحتاج إلى تعديل endpoint حسب API الخاص بك
-    resp = self.scraper.post(
-        self.ORIGIN + "/global/api/Player/updatePassword",
-        json=payload,
-        headers=self._get_headers()
-    )
-
-    try:
-        data = resp.json()
-        return resp.status_code, data
-    except Exception:
-        return resp.status_code, {}
-
-@with_retry
-def get_player_statistics(self, player_id: str, start_date: str = None, end_date: str = None) -> dict:
-    """الحصول على إحصائيات اللاعب"""
-    # تنسيق التواريخ
-    if not start_date:
-        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-    if not end_date:
-        end_date = datetime.now().strftime('%Y-%m-%d')
-
-    payload = {
-        "playerId": player_id,
-        "startDate": start_date,
-        "endDate": end_date
-    }
-
-    resp = self.scraper.post(
-        self.ORIGIN + "/global/api/Statistics/getPlayerStatistics",
-        json=payload,
-        headers=self._get_headers()
-    )
-
-    try:
-        data = resp.json()
-        return data
-    except Exception:
-        return {}
-
-@with_retry
-def get_agent_balance(self) -> Tuple[int, dict, float]:
-    """الحصول على رصيد الوكيل"""
-    payload = {"parentId": self.PARENT_ID}
-
-    resp = self.scraper.post(
-        self.ORIGIN + "/global/api/Agent/getAgentBalance",
-        json=payload,
-        headers=self._get_headers()
-    )
-
-    try:
-        data = resp.json()
-        balance = data.get("result", {}).get("balance", 0)
-        return resp.status_code, data, balance
-    except Exception:
-        return resp.status_code, {}, 0
-
-@with_retry
-def transfer_between_players(self, from_player_id: str, to_player_id: str, amount: float) -> Tuple[int, dict]:
-    """تحويل بين لاعبين"""
-    payload = {
-        "fromPlayerId": from_player_id,
-        "toPlayerId": to_player_id,
-        "amount": amount,
-        "currencyCode": "NSP",
-        "comment": "Transfer between players"
-    }
-
-    resp = self.scraper.post(
-        self.ORIGIN + "/global/api/Player/transferBetweenPlayers",
-        json=payload,
-        headers=self._get_headers()
-    )
-
-    try:
-        data = resp.json()
-        return resp.status_code, data
-    except Exception:
-        return resp.status_code, {}
-
-@with_retry
-def get_transaction_history(self, player_id: str = None, page: int = 1, page_size: int = 50) -> dict:
-    """الحصول على سجل المعاملات"""
-    filter_data = {}
-    if player_id:
-        filter_data["playerId"] = player_id
-
-    payload = {
-        "page": page,
-        "pageSize": page_size,
-        "filter": filter_data
-    }
-
-    resp = self.scraper.post(
-        self.ORIGIN + "/global/api/Transaction/getTransactionHistory",
-        json=payload,
-        headers=self._get_headers()
-    )
-
-    try:
-        data = resp.json()
-        return data
-    except Exception:
-        return {}
-    # ========== مثال الاستخدام ==========
+# ========== استخدام مباشر (اختياري) ==========
 
 if __name__ == "__main__":
-    # الطريقة 1: استخدام متغيرات البيئة
+    # إنشاء API - ستستخدم متغيرات البيئة للتلغرام
     api = IChancyAPI()
     
-    # الطريقة 2: تحديد التوكن والقناة مباشرة
-    # api = IChancyAPI(
-    #     telegram_bot_token="YOUR_BOT_TOKEN",
-    #     telegram_chat_id="-1003317405069"
-    # )
-    
     try:
-        # بدء النظام
-        api.ensure_login()
-        
-        # إرسال تقرير الحالة
-        api.send_status_report()
-        
-        # استخدام API بشكل طبيعي
-        # players = api.get_all_players()
-        # print(f"عدد اللاعبين: {len(players)}")
-        
-        # البقاء نشطاً
-        print("✅ النظام يعمل... اضغط Ctrl+C للإيقاف")
-        while True:
-            time.sleep(60)
+        # محاولة الاتصال
+        if api.ensure_login():
+            print("✅ تم الاتصال بنجاح")
+            print(api.get_session_info())
+            
+            # البقاء نشطاً
+            print("النظام يعمل... اضغط Ctrl+C للإيقاف")
+            while True:
+                time.sleep(60)
+        else:
+            print("❌ فشل في الاتصال")
             
     except KeyboardInterrupt:
         print("\n🛑 إيقاف بطلب المستخدم...")
