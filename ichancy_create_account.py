@@ -11,7 +11,6 @@ def _random_suffix(length=3):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 def generate_username(raw_username: str) -> str:
-    """إنشاء اسم مستخدم فريد"""
     base = f"ZEUS_{raw_username}"
     for i in range(6):
         username = base if i == 0 else f"{base}_{_random_suffix()}"
@@ -23,7 +22,7 @@ def start_create_account(bot, call):
     chat_id = call.message.chat.id
     telegram_id = call.from_user.id
 
-    # تحقق إذا كان لدى المستخدم حساب مسبقاً
+    # التحقق إذا كان لدى المستخدم حساب مسبقاً
     existing_player = db.get_player_by_telegram_id(telegram_id)
     if existing_player:
         bot.edit_message_text(
@@ -37,108 +36,74 @@ def start_create_account(bot, call):
         )
         return
 
-    # بدء العملية: تعديل الرسالة لتكون تحضير الاسم
+    # تعديل الرسالة لإعداد العملية
     bot.edit_message_text(
         chat_id=chat_id,
         message_id=call.message.message_id,
         text="📝 جاري تحضير إنشاء الحساب، يرجى الانتظار..."
     )
 
-    # رسائل مرحلية لتحسين تجربة المستخدم
-    stages = [
-        "🔄 التحقق من الاسم المطلوب...",
-        "⏳ إعداد البيانات الأولية...",
-        "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
-    ]
-    for stage in stages:
+    # رسائل مرحلية قصيرة
+    for stage in ["🔄 التحقق من الاسم المطلوب...", "⏳ إعداد البيانات الأولية..."]:
         time.sleep(0.5)
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text=stage
-        )
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=stage)
+
+    # طلب اسم المستخدم
+    bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=call.message.message_id,
+        text="📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
+    )
 
     bot.register_next_step_handler_by_chat_id(
-        chat_id, 
+        chat_id,
         lambda msg: process_username_step(bot, msg, telegram_id, call.message.message_id)
     )
 
 def process_username_step(bot, message, telegram_id, message_id):
-    raw_username = message.text.strip()
-    raw_username = ''.join(c for c in raw_username if c.isalnum() or c in ['_', '-'])
+    raw_username = ''.join(c for c in message.text.strip() if c.isalnum() or c in ['_', '-'])
 
     if len(raw_username) < 3:
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=message_id,
-            text="❌ الاسم قصير جداً، يجب أن يكون 3 أحرف على الأقل"
-        )
+        bot.edit_message_text(chat_id=message.chat.id, message_id=message_id,
+                              text="❌ الاسم قصير جداً، يجب أن يكون 3 أحرف على الأقل")
         return
 
     try:
         username = generate_username(raw_username)
 
-        # رسائل مرحلية لإعطاء إحساس بالتحقق
-        stages = [
-            f"✅ الاسم متاح: `{username}`",
-            "🔐 الآن أرسل كلمة السر:\n- يجب أن تحتوي على أحرف كبيرة وصغيرة\n- يجب أن تحتوي على أرقام\n- يجب أن تكون 8 أحرف على الأقل\n\nمثال: `Pass1234`"
-        ]
-        for stage in stages:
+        # رسائل مرحلية قصيرة
+        for stage in [f"✅ الاسم متاح: `{username}`", 
+                      "🔐 الآن أرسل كلمة السر:\n- يجب أن تحتوي على أحرف كبيرة وصغيرة\n- يجب أن تحتوي على أرقام\n- يجب أن تكون 8 أحرف على الأقل\nمثال: `Pass1234`"]:
             time.sleep(0.5)
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=message_id,
-                text=stage,
-                parse_mode="Markdown"
-            )
+            bot.edit_message_text(chat_id=message.chat.id, message_id=message_id, text=stage, parse_mode="Markdown")
 
         bot.register_next_step_handler_by_chat_id(
-            message.chat.id, 
+            message.chat.id,
             lambda msg: process_password_step(bot, msg, telegram_id, username, message_id)
         )
-
     except Exception as e:
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=message_id,
-            text=f"❌ خطأ: {str(e)}\n\nيرجى المحاولة مرة أخرى باستخدام /start"
-        )
+        bot.edit_message_text(chat_id=message.chat.id, message_id=message_id,
+                              text=f"❌ خطأ: {str(e)}\n\nيرجى المحاولة مرة أخرى باستخدام /start")
 
 def process_password_step(bot, message, telegram_id, username, message_id):
     password = message.text.strip()
 
-    # التحقق من قوة كلمة المرور
     if len(password) < 8 or not any(c.isupper() for c in password) or not any(c.islower() for c in password) or not any(c.isdigit() for c in password):
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=message_id,
-            text="❌ كلمة المرور غير صالحة.\nتأكد أنها تحتوي على أحرف كبيرة وصغيرة، أرقام، وطولها 8 أحرف على الأقل."
-        )
+        bot.edit_message_text(chat_id=message.chat.id, message_id=message_id,
+                              text="❌ كلمة المرور غير صالحة.\nتأكد أنها تحتوي على أحرف كبيرة وصغيرة، أرقام، وطولها 8 أحرف على الأقل.")
         return
 
-    # رسائل مرحلية لمحاكاة نشاط البوت
-    stages = [
-        "🔄 جاري إنشاء الحساب، يرجى الانتظار...",
-        "⏳ يتم التحقق من بياناتك وإنشاء الحساب...",
-        "🚀 تقريباً انتهينا..."
-    ]
-    for stage in stages:
+    # رسائل مرحلية قصيرة لمحاكاة النشاط
+    for stage in ["🔄 جاري إنشاء الحساب، يرجى الانتظار...", "⏳ يتم التحقق من بياناتك وإنشاء الحساب..."]:
         time.sleep(0.5)
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=message_id,
-            text=stage
-        )
+        bot.edit_message_text(chat_id=message.chat.id, message_id=message_id, text=stage)
 
     try:
         email = f"{username.lower()}@player.ichancy.com"
 
         if api.check_player_exists(username):
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=message_id,
-                text="❌ هذا الاسم مستخدم بالفعل، يرجى اختيار اسم آخر"
-            )
+            bot.edit_message_text(chat_id=message.chat.id, message_id=message_id,
+                                  text="❌ هذا الاسم مستخدم بالفعل، يرجى اختيار اسم آخر")
             return
 
         status, data, player_id, email_created = api.create_player_with_credentials(username, password)
@@ -154,10 +119,9 @@ def process_password_step(bot, message, telegram_id, username, message_id):
         if not player_id:
             raise ValueError("لم يتم إنشاء معرف اللاعب")
 
-        # حفظ البيانات في قاعدة البيانات
         db.update_player_info(telegram_id, player_id, username, email_created or email, password)
 
-        # تعديل الرسالة لإظهار معلومات الحساب النهائي
+        # تعديل الرسالة النهائية
         final_text = f"""
 ✅ **تم إنشاء الحساب بنجاح!**
 
@@ -171,18 +135,10 @@ https://www.ichancy.com/login
 
 ⚠️ **احفظ هذه البيانات في مكان آمن!**
 """
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=message_id,
-            text=final_text,
-            parse_mode="Markdown"
-        )
+        bot.edit_message_text(chat_id=message.chat.id, message_id=message_id, text=final_text, parse_mode="Markdown")
 
     except Exception as e:
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=message_id,
-            text=f"❌ **فشل إنشاء الحساب:**\n{str(e)}\n\nيرجى المحاولة لاحقاً أو التواصل مع الدعم.",
-            parse_mode="Markdown"
-        )
+        bot.edit_message_text(chat_id=message.chat.id, message_id=message_id,
+                              text=f"❌ **فشل إنشاء الحساب:**\n{str(e)}\n\nيرجى المحاولة لاحقاً أو التواصل مع الدعم.",
+                              parse_mode="Markdown")
 
