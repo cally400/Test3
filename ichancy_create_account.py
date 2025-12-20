@@ -20,45 +20,32 @@ def generate_username(raw_username: str) -> str:
 
 def start_create_account(bot, call):
     chat_id = call.message.chat.id
+    message_id = call.message.message_id
     telegram_id = call.from_user.id
 
-    # التحقق إذا كان لدى المستخدم حساب مسبقاً
-    existing_player = db.get_player_by_telegram_id(telegram_id)
-    if existing_player:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text=f"⚠️ لديك حساب مسبقاً!\n\n"
-                 f"👤 اسم المستخدم: `{existing_player['username']}`\n"
-                 f"🆔 معرف اللاعب: `{existing_player['player_id']}`\n"
-                 f"إذا أردت إنشاء حساب جديد، استخدم رابط آخر أو تواصل مع الدعم.",
-            parse_mode="Markdown"
-        )
-        return
-
-    # تعديل الرسالة لإعداد العملية
     bot.edit_message_text(
         chat_id=chat_id,
-        message_id=call.message.message_id,
-        text="📝 جاري تحضير إنشاء الحساب، يرجى الانتظار..."
-    )
-
-    # رسائل مرحلية قصيرة
-    for stage in ["🔄 التحقق من الاسم المطلوب...", "⏳ إعداد البيانات الأولية..."]:
-        time.sleep(0.5)
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=stage)
-
-    # طلب اسم المستخدم
-    bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=call.message.message_id,
+        message_id=message_id,
         text="📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
     )
 
     bot.register_next_step_handler_by_chat_id(
         chat_id,
-        lambda msg: process_username_step(bot, msg, telegram_id, call.message.message_id)
+        lambda msg: process_username_step(bot, msg, telegram_id, message_id)
     )
+
+def display_progress(bot, chat_id, message_id, prefix="🔄 جاري العملية", total=20, delay=0.2):
+    """إظهار شريط تقدم واقعي"""
+    for i in range(total + 1):
+        filled = '█' * i
+        empty = '░' * (total - i)
+        percent = int((i / total) * 100)
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"{prefix}...\n[{filled}{empty}] {percent}%"
+        )
+        time.sleep(delay)
 
 def process_username_step(bot, message, telegram_id, message_id):
     raw_username = ''.join(c for c in message.text.strip() if c.isalnum() or c in ['_', '-'])
@@ -71,16 +58,21 @@ def process_username_step(bot, message, telegram_id, message_id):
     try:
         username = generate_username(raw_username)
 
-        # رسائل مرحلية قصيرة
-        for stage in [f"✅ الاسم متاح: `{username}`", 
-                      "🔐 الآن أرسل كلمة السر:\n- يجب أن تحتوي على أحرف كبيرة وصغيرة\n- يجب أن تحتوي على أرقام\n- يجب أن تكون 8 أحرف على الأقل\nمثال: `Pass1234`"]:
-            time.sleep(0.5)
-            bot.edit_message_text(chat_id=message.chat.id, message_id=message_id, text=stage, parse_mode="Markdown")
+        # عرض شريط تقدم قبل طلب كلمة المرور
+        display_progress(bot, message.chat.id, message_id, prefix="🔄 التحقق من الاسم وتجهيز الحساب")
+
+        bot.edit_message_text(chat_id=message.chat.id, message_id=message_id,
+                              text=f"✅ الاسم متاح: `{username}`\n\n🔐 الآن أرسل كلمة السر:\n"
+                                   f"- يجب أن تحتوي على أحرف كبيرة وصغيرة\n"
+                                   f"- يجب أن تحتوي على أرقام\n"
+                                   f"- يجب أن تكون 8 أحرف على الأقل\n\n"
+                                   f"مثال: `Pass1234`")
 
         bot.register_next_step_handler_by_chat_id(
             message.chat.id,
             lambda msg: process_password_step(bot, msg, telegram_id, username, message_id)
         )
+
     except Exception as e:
         bot.edit_message_text(chat_id=message.chat.id, message_id=message_id,
                               text=f"❌ خطأ: {str(e)}\n\nيرجى المحاولة مرة أخرى باستخدام /start")
@@ -88,15 +80,14 @@ def process_username_step(bot, message, telegram_id, message_id):
 def process_password_step(bot, message, telegram_id, username, message_id):
     password = message.text.strip()
 
-    if len(password) < 8 or not any(c.isupper() for c in password) or not any(c.islower() for c in password) or not any(c.isdigit() for c in password):
+    if len(password) < 8 or not any(c.isupper() for c in password) \
+       or not any(c.islower() for c in password) or not any(c.isdigit() for c in password):
         bot.edit_message_text(chat_id=message.chat.id, message_id=message_id,
                               text="❌ كلمة المرور غير صالحة.\nتأكد أنها تحتوي على أحرف كبيرة وصغيرة، أرقام، وطولها 8 أحرف على الأقل.")
         return
 
-    # رسائل مرحلية قصيرة لمحاكاة النشاط
-    for stage in ["🔄 جاري إنشاء الحساب، يرجى الانتظار...", "⏳ يتم التحقق من بياناتك وإنشاء الحساب..."]:
-        time.sleep(0.5)
-        bot.edit_message_text(chat_id=message.chat.id, message_id=message_id, text=stage)
+    # عرض شريط تقدم لإنشاء الحساب
+    display_progress(bot, message.chat.id, message_id, prefix="⏳ إنشاء الحساب")
 
     try:
         email = f"{username.lower()}@player.ichancy.com"
@@ -121,7 +112,7 @@ def process_password_step(bot, message, telegram_id, username, message_id):
 
         db.update_player_info(telegram_id, player_id, username, email_created or email, password)
 
-        # تعديل الرسالة النهائية
+        # الرسالة النهائية
         final_text = f"""
 ✅ **تم إنشاء الحساب بنجاح!**
 
@@ -135,7 +126,8 @@ https://www.ichancy.com/login
 
 ⚠️ **احفظ هذه البيانات في مكان آمن!**
 """
-        bot.edit_message_text(chat_id=message.chat.id, message_id=message_id, text=final_text, parse_mode="Markdown")
+        bot.edit_message_text(chat_id=message.chat.id, message_id=message_id,
+                              text=final_text, parse_mode="Markdown")
 
     except Exception as e:
         bot.edit_message_text(chat_id=message.chat.id, message_id=message_id,
