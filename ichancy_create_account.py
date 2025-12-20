@@ -1,7 +1,5 @@
-import os
 import random
 import string
-import threading
 import time
 import db
 from ichancy_api import IChancyAPI
@@ -12,7 +10,6 @@ def _random_suffix(length=3):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 def generate_username(raw_username: str) -> str:
-    """إنشاء اسم مستخدم فريد"""
     base = f"ZEUS_{raw_username}"
     for i in range(6):
         username = base if i == 0 else f"{base}_{_random_suffix()}"
@@ -20,54 +17,53 @@ def generate_username(raw_username: str) -> str:
             return username
     raise ValueError("❌ اسم المستخدم غير متاح، جرّب اسمًا آخر")
 
-def show_progress(bot, chat_id, text_prefix="⏳ جاري التحقق:", duration=3):
-    """شريط التقدم يعمل في ثريد منفصل"""
-    progress_msg = bot.send_message(chat_id, f"{text_prefix}\n[░░░░░░░░░░] 0%")
+def show_progress(bot, chat_id, text_prefix="⏳ جاري:", duration=3):
+    msg = bot.send_message(chat_id, f"{text_prefix}\n[░░░░░░░░░░] 0%")
     for i in range(1, 11):
         time.sleep(duration / 10)
         progress_bar = "█" * i + "░" * (10 - i)
         try:
             bot.edit_message_text(
                 chat_id=chat_id,
-                message_id=progress_msg.message_id,
+                message_id=msg.message_id,
                 text=f"{text_prefix}\n[{progress_bar}] {i*10}%"
             )
         except:
             pass
     try:
-        bot.delete_message(chat_id=chat_id, message_id=progress_msg.message_id)
+        bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
     except:
         pass
 
 def start_create_account(bot, call):
     telegram_id = call.from_user.id
-    # تحقق أولاً إذا كان المستخدم لديه معلومات مسبقًا
     player_data = db.get_player_info(telegram_id)
+    
     if player_data:
-        msg = bot.send_message(call.message.chat.id, "ℹ️ لديك حساب مسبقًا")
-    else:
-        msg = bot.send_message(call.message.chat.id, "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):")
-
+        bot.send_message(call.message.chat.id, "ℹ️ لديك حساب مسبقًا")
+        return
+    
+    msg = bot.send_message(call.message.chat.id, "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):")
+    
     bot.register_next_step_handler_by_chat_id(
         call.message.chat.id,
-        lambda msg2: process_username_step(bot, msg2, telegram_id)
+        lambda message: process_username_step(bot, message, telegram_id)
     )
 
 def process_username_step(bot, message, telegram_id):
     raw_username = ''.join(c for c in message.text.strip() if c.isalnum() or c in ['_', '-'])
-    
     if len(raw_username) < 3:
         bot.send_message(message.chat.id, "❌ الاسم قصير جداً، يجب أن يكون 3 أحرف على الأقل")
         return
 
-    try:
-        # تشغيل شريط التقدم بعد إدخال الاسم
-        threading.Thread(target=show_progress, args=(bot, message.chat.id, "⏳ جاري التحقق من الاسم:", 3)).start()
+    # شريط التقدم بعد إدخال الاسم مباشرة
+    show_progress(bot, message.chat.id, "⏳ جاري التحقق من الاسم:", 3)
 
+    try:
         username = generate_username(raw_username)
 
         bot.send_message(
-            message.chat.id, 
+            message.chat.id,
             f"✅ الاسم متاح: `{username}`\n\n"
             f"🔐 **الآن أرسل كلمة السر:**\n"
             f"- يجب أن تحتوي على أحرف كبيرة وصغيرة\n"
@@ -78,7 +74,7 @@ def process_username_step(bot, message, telegram_id):
         )
 
         bot.register_next_step_handler_by_chat_id(
-            message.chat.id, 
+            message.chat.id,
             lambda msg: process_password_step(bot, msg, telegram_id, username)
         )
     except Exception as e:
@@ -87,8 +83,8 @@ def process_username_step(bot, message, telegram_id):
 def process_password_step(bot, message, telegram_id, username):
     password = message.text.strip()
 
-    # تشغيل شريط التقدم بعد إدخال كلمة المرور
-    threading.Thread(target=show_progress, args=(bot, message.chat.id, "⏳ جاري إنشاء الحساب:", 3)).start()
+    # شريط التقدم بعد إدخال كلمة المرور
+    show_progress(bot, message.chat.id, "⏳ جاري إنشاء الحساب:", 3)
 
     if len(password) < 8:
         bot.send_message(message.chat.id, "❌ كلمة المرور قصيرة جداً، يجب أن تكون 8 أحرف على الأقل")
@@ -132,11 +128,6 @@ def process_password_step(bot, message, telegram_id, username):
 🔗 **رابط تسجيل الدخول:**
 https://www.ichancy.com/login
 
-📌 **مهم:**
-1. استخدم نفس بيانات الدخول أعلاه
-2. إذا لم تعمل، جرب تغيير كلمة المرور أول مرة
-3. للتأكد، يمكنك استخدام "نسيت كلمة المرور" على الموقع
-
 ⚠️ **احفظ هذه البيانات في مكان آمن!**
         """
 
@@ -154,8 +145,7 @@ https://www.ichancy.com/login
     except Exception as e:
         bot.send_message(
             message.chat.id,
-            f"❌ **فشل إنشاء الحساب:**\n\n{str(e)}\n\n"
-            f"يرجى المحاولة مرة أخرى لاحقاً أو التواصل مع الدعم.",
+            f"❌ **فشل إنشاء الحساب:**\n\n{str(e)}\n\nيرجى المحاولة مرة أخرى لاحقاً أو التواصل مع الدعم.",
             parse_mode="Markdown"
         )
 
