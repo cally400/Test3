@@ -1,8 +1,9 @@
 import os
 import random
 import string
-import db
 import time
+import db
+from telebot import types
 from ichancy_api import IChancyAPI
 
 api = IChancyAPI()
@@ -43,7 +44,11 @@ def start_create_account(bot, call):
     telegram_id = call.from_user.id
     
     # التحقق من وجود حساب مسبق في قاعدة البيانات
-    existing_account = db.get_player_info(telegram_id)
+    try:
+        existing_account = db.get_player_info(telegram_id)
+    except Exception as e:
+        print(f"Error checking existing account: {e}")
+        existing_account = None
     
     if existing_account:
         # إذا كان لديه حساب مسبق
@@ -78,33 +83,60 @@ https://www.ichancy.com/login
         keyboard.add(buttons[0], buttons[1])
         keyboard.add(buttons[2], buttons[3])
         
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=message_text,
-            parse_mode="Markdown",
-            reply_markup=keyboard
-        )
+        try:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=message_text,
+                parse_mode="Markdown",
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            # إذا فشل تعديل الرسالة، أرسل رسالة جديدة
+            bot.send_message(
+                call.message.chat.id,
+                message_text,
+                parse_mode="Markdown",
+                reply_markup=keyboard
+            )
         
     else:
         # إذا لم يكن لديه حساب مسبق
         new_message_text = "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
         
-        # تعديل الرسالة الأصلية
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=new_message_text
-        )
+        try:
+            # تعديل الرسالة الأصلية
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=new_message_text
+            )
+        except Exception as e:
+            # إذا فشل تعديل الرسالة، أرسل رسالة جديدة
+            bot.send_message(call.message.chat.id, new_message_text)
         
         # التسجيل للخطوة التالية
-        bot.register_next_step_handler_by_chat_id(
-            call.message.chat.id, 
-            lambda msg: process_username_step(bot, msg, telegram_id)
-        )
+        try:
+            bot.register_next_step_handler_by_chat_id(
+                call.message.chat.id, 
+                lambda msg: process_username_step(bot, msg, telegram_id)
+            )
+        except Exception as e:
+            bot.send_message(call.message.chat.id, "❌ حدث خطأ. يرجى المحاولة مرة أخرى باستخدام /start")
 
 def process_username_step(bot, message, telegram_id):
+    # التحقق من أن الرسالة نصية
+    if not message.text:
+        bot.send_message(message.chat.id, "❌ يجب إرسال اسم مستخدم نصي")
+        return
+    
     raw_username = message.text.strip()
+    
+    # التحقق من أن الاسم ليس فارغاً
+    if not raw_username:
+        bot.send_message(message.chat.id, "❌ يجب إدخال اسم مستخدم")
+        return
+    
     # تنظيف الاسم
     raw_username = ''.join(c for c in raw_username if c.isalnum() or c in ['_', '-'])
     
@@ -126,7 +158,8 @@ def process_username_step(bot, message, telegram_id):
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=progress_msg.message_id,
-            text=f"✅ **تم العثور على اسم متاح!**\n\n👤 **اسم المستخدم:** `{username}`"
+            text=f"✅ **تم العثور على اسم متاح!**\n\n👤 **اسم المستخدم:** `{username}`",
+            parse_mode="Markdown"
         )
         
         # إرسال رسالة طلب كلمة السر
@@ -155,7 +188,17 @@ def process_username_step(bot, message, telegram_id):
         )
 
 def process_password_step(bot, message, telegram_id, username):
+    # التحقق من أن الرسالة نصية
+    if not message.text:
+        bot.send_message(message.chat.id, "❌ يجب إرسال كلمة سر نصية")
+        return
+    
     password = message.text.strip()
+    
+    # التحقق من أن كلمة المرور ليست فارغة
+    if not password:
+        bot.send_message(message.chat.id, "❌ يجب إدخال كلمة مرور")
+        return
     
     # التحقق من قوة كلمة المرور
     if len(password) < 8:
@@ -187,7 +230,8 @@ def process_password_step(bot, message, telegram_id, username):
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=progress_msg.message_id,
-            text="🔄 جارِ التحقق من توفر الاسم..."
+            text="🔄 جارِ التحقق من توفر الاسم...",
+            parse_mode="Markdown"
         )
         
         # تحقق أولاً إذا كان الحساب موجود بالفعل
@@ -195,7 +239,8 @@ def process_password_step(bot, message, telegram_id, username):
             bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=progress_msg.message_id,
-                text="❌ هذا الاسم مستخدم بالفعل، يرجى اختيار اسم آخر"
+                text="❌ هذا الاسم مستخدم بالفعل، يرجى اختيار اسم آخر",
+                parse_mode="Markdown"
             )
             return
         
@@ -203,7 +248,8 @@ def process_password_step(bot, message, telegram_id, username):
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=progress_msg.message_id,
-            text="🔄 جارِ إنشاء الحساب في النظام..."
+            text="🔄 جارِ إنشاء الحساب في النظام...",
+            parse_mode="Markdown"
         )
         
         # إنشاء الحساب
@@ -224,7 +270,8 @@ def process_password_step(bot, message, telegram_id, username):
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=progress_msg.message_id,
-            text="🔄 جارِ حفظ البيانات في قاعدة البيانات..."
+            text="🔄 جارِ حفظ البيانات في قاعدة البيانات...",
+            parse_mode="Markdown"
         )
         
         # حفظ البيانات في قاعدة البيانات
@@ -234,7 +281,8 @@ def process_password_step(bot, message, telegram_id, username):
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=progress_msg.message_id,
-            text="✅ **تم إنشاء الحساب بنجاح!**\n\nجارِ تجهيز البيانات..."
+            text="✅ **تم إنشاء الحساب بنجاح!**\n\nجارِ تجهيز البيانات...",
+            parse_mode="Markdown"
         )
         
         time.sleep(1)  # تأخير بسيط للقراءة
@@ -260,7 +308,10 @@ https://www.ichancy.com/login
         """
         
         # حذف رسالة التقدم القديمة
-        bot.delete_message(message.chat.id, progress_msg.message_id)
+        try:
+            bot.delete_message(message.chat.id, progress_msg.message_id)
+        except:
+            pass
         
         # إرسال المعلومات
         bot.send_message(message.chat.id, login_info, parse_mode="Markdown")
@@ -282,7 +333,8 @@ https://www.ichancy.com/login
             chat_id=message.chat.id,
             message_id=progress_msg.message_id,
             text=f"❌ **فشل إنشاء الحساب:**\n\n{str(e)}\n\n"
-                 f"يرجى المحاولة مرة أخرى لاحقاً أو التواصل مع الدعم."
+                 f"يرجى المحاولة مرة أخرى لاحقاً أو التواصل مع الدعم.",
+            parse_mode="Markdown"
         )
 
 # دالة جديدة للتعامل مع الأزرار الجديدة
@@ -292,7 +344,11 @@ def handle_account_options(bot, call):
     
     if data == 'account_info':
         telegram_id = call.from_user.id
-        account_info = db.get_player_info(telegram_id)
+        try:
+            account_info = db.get_player_info(telegram_id)
+        except Exception as e:
+            bot.answer_callback_query(call.id, "❌ حدث خطأ في جلب المعلومات")
+            return
         
         if account_info:
             username = account_info.get('username', 'غير معروف')
@@ -310,39 +366,55 @@ def handle_account_options(bot, call):
 https://www.ichancy.com/login
             """
             
+            try:
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text=info_text,
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                bot.send_message(call.message.chat.id, info_text, parse_mode="Markdown")
+    
+    elif data == 'change_password':
+        try:
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
-                text=info_text,
+                text="🔐 أرسل كلمة السر الجديدة:",
                 parse_mode="Markdown"
             )
-    
-    elif data == 'change_password':
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text="🔐 أرسل كلمة السر الجديدة:",
-            parse_mode="Markdown"
-        )
-        # هنا يمكنك إضافة منطق تغيير كلمة السر
+            # هنا يمكنك إضافة منطق تغيير كلمة السر
+        except Exception as e:
+            bot.send_message(call.message.chat.id, "🔐 أرسل كلمة السر الجديدة:")
     
     elif data == 'delete_account':
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text="⚠️ هل أنت متأكد من حذف حسابك؟ هذه العملية لا يمكن التراجع عنها.",
-            parse_mode="Markdown"
-        )
-        # هنا يمكنك إضافة منطق حذف الحساب
+        try:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="⚠️ هل أنت متأكد من حذف حسابك؟ هذه العملية لا يمكن التراجع عنها.",
+                parse_mode="Markdown"
+            )
+            # هنا يمكنك إضافة منطق حذف الحساب
+        except Exception as e:
+            bot.send_message(call.message.chat.id, "⚠️ هل أنت متأكد من حذف حسابك؟ هذه العملية لا يمكن التراجع عنها.")
     
     elif data == 'new_account':
         # إعادة توجيه المستخدم لإنشاء حساب جديد
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text="📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
-        )
-        bot.register_next_step_handler_by_chat_id(
-            call.message.chat.id, 
-            lambda msg: process_username_step(bot, msg, call.from_user.id)
-        )
+        try:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
+            )
+            bot.register_next_step_handler_by_chat_id(
+                call.message.chat.id, 
+                lambda msg: process_username_step(bot, msg, call.from_user.id)
+            )
+        except Exception as e:
+            bot.send_message(call.message.chat.id, "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):")
+            bot.register_next_step_handler_by_chat_id(
+                call.message.chat.id, 
+                lambda msg: process_username_step(bot, msg, call.from_user.id)
+            )
