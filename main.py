@@ -281,7 +281,6 @@ def delete_user_data(message):
     chat_id = message.chat.id
 
     try:
-        # 1️⃣ تحقق هل لديه حساب iChancy فعلي
         if not db.has_ichancy_account(telegram_id):
             bot.send_message(
                 chat_id,
@@ -289,7 +288,6 @@ def delete_user_data(message):
             )
             return
 
-        # 2️⃣ حذف معلومات الحساب
         db.clear_player_info(telegram_id)
 
         bot.send_message(
@@ -306,7 +304,7 @@ def delete_user_data(message):
     except Exception as e:
         bot.send_message(
             chat_id,
-            "❌ حدث خطأ أثناء حذف البيانات، يرجى المحاولة لاحقًا."
+            "❌ حدث خطأ أثناء حذف البيانات."
         )
-        print("❌ DEL ERROR:", e)
+        print("DEL ERROR:", e)
 
