@@ -30,35 +30,30 @@ referrals = db.referrals
 def ensure_indexes():
     try:
         users.create_index("telegram_id", unique=True)
-    except OperationFailure as e:
-        print(f"⚠️ index telegram_id skipped: {e}")
+    except OperationFailure:
+        pass
 
     try:
-        users.create_index("player_id", unique=True)
-    except OperationFailure as e:
-        print(f"⚠️ index player_id skipped: {e}")
+        users.create_index("player_id", unique=True, sparse=True)
+    except OperationFailure:
+        pass
 
     try:
         transactions.create_index("telegram_id")
-    except OperationFailure as e:
-        print(f"⚠️ index transactions.telegram_id skipped: {e}")
-
-    try:
         transactions.create_index("created_at")
-    except OperationFailure as e:
-        print(f"⚠️ index transactions.created_at skipped: {e}")
+    except OperationFailure:
+        pass
 
     try:
         referrals.create_index("referrer_id")
-    except OperationFailure as e:
-        print(f"⚠️ index referrals.referrer_id skipped: {e}")
+    except OperationFailure:
+        pass
 
     try:
         referrals.create_index("referred_id", unique=True)
-    except OperationFailure as e:
-        print(f"⚠️ index referrals.referred_id skipped: {e}")
+    except OperationFailure:
+        pass
 
-# تنفيذ آمن
 ensure_indexes()
 
 # ============================
@@ -91,11 +86,14 @@ def create_user(telegram_id, username, first_name, last_name):
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
     }
-    
+
     try:
         users.insert_one(user_data)
         return True
     except Exception as e:
+        # في حال التكرار لا نكسر المنطق
+        if "duplicate key" in str(e).lower():
+            return True
         print(f"❌ خطأ في إنشاء المستخدم: {e}")
         return False
 
@@ -120,32 +118,36 @@ def update_player_info(telegram_id, player_id, player_username, player_email, pl
         "player_password": player_password
     })
 
+# ============================
+# تحديث الرصيد (آمن + ذَرّي)
+# ============================
+
 def update_balance(telegram_id, amount, is_withdrawal=False):
-    user = get_user(telegram_id)
-    if not user:
-        return False
-    
-    new_balance = user["balance"] + amount
-    
     transaction_type = "withdrawal" if is_withdrawal else "deposit"
     status = "completed" if amount > 0 else "pending"
-    
+
+    # تسجيل المعاملة (كما في المنطق الأصلي)
     log_transaction(
         telegram_id=telegram_id,
-        player_id=user.get("player_id"),
+        player_id=None,
         amount=abs(amount),
         ttype=transaction_type,
         status=status
     )
-    
-    update_data = {"balance": new_balance}
-    
+
+    inc_fields = {"balance": amount}
+
     if amount > 0:
-        update_data["total_earned"] = user.get("total_earned", 0) + amount
+        inc_fields["total_earned"] = amount
     elif is_withdrawal and amount < 0:
-        update_data["total_withdrawn"] = user.get("total_withdrawn", 0) + abs(amount)
-    
-    return update_user(telegram_id, update_data)
+        inc_fields["total_withdrawn"] = abs(amount)
+
+    result = users.update_one(
+        {"telegram_id": telegram_id},
+        {"$inc": inc_fields, "$set": {"updated_at": datetime.utcnow()}}
+    )
+
+    return result.modified_count > 0
 
 # ============================
 # إدارة الإحالات
@@ -161,7 +163,7 @@ def add_referral(referrer_id, referred_id):
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
     }
-    
+
     try:
         referrals.insert_one(referral_data)
         users.update_one(
@@ -170,6 +172,8 @@ def add_referral(referrer_id, referred_id):
         )
         return True
     except Exception as e:
+        if "duplicate key" in str(e).lower():
+            return True
         print(f"❌ خطأ في إضافة الإحالة: {e}")
         return False
 
@@ -177,28 +181,31 @@ def activate_referral(referred_id):
     referral = referrals.find_one({"referred_id": referred_id})
     if not referral:
         return False
-    
+
     referrals.update_one(
         {"referred_id": referred_id},
-        {"$set": {"is_active": True, "has_deposited": True}}
+        {"$set": {
+            "is_active": True,
+            "has_deposited": True,
+            "updated_at": datetime.utcnow()
+        }}
     )
-    
-    users.update_one(
-        {"telegram_id": referral["referrer_id"]},
-        {"$inc": {"active_referrals_count": 1}}
-    )
-    
+
     reward_amount = float(os.getenv("REFERRAL_REWARD", "5.0"))
+
     users.update_one(
         {"telegram_id": referral["referrer_id"]},
-        {"$inc": {"referral_balance": reward_amount}}
+        {"$inc": {
+            "active_referrals_count": 1,
+            "referral_balance": reward_amount
+        }}
     )
-    
+
     referrals.update_one(
         {"referred_id": referred_id},
         {"$set": {"referral_reward": reward_amount}}
     )
-    
+
     return True
 
 # ============================
@@ -219,7 +226,11 @@ def get_user_transactions(telegram_id, limit=10, transaction_type=None):
     query = {"telegram_id": telegram_id}
     if transaction_type:
         query["type"] = transaction_type
-    return list(transactions.find(query).sort("created_at", -1).limit(limit))
+    return list(
+        transactions.find(query)
+        .sort("created_at", -1)
+        .limit(limit)
+    )
 
 def get_user_referrals(telegram_id):
     return list(referrals.find({"referrer_id": telegram_id}))
@@ -228,10 +239,10 @@ def get_user_stats(telegram_id):
     user = get_user(telegram_id)
     if not user:
         return None
-    
+
     referrals_list = get_user_referrals(telegram_id)
     transactions_list = get_user_transactions(telegram_id, limit=20)
-    
+
     return {
         "user": user,
         "referrals": referrals_list,
@@ -245,10 +256,6 @@ def get_user_stats(telegram_id):
     }
 
 def clear_player_info(telegram_id):
-    user = users.find_one({"telegram_id": telegram_id})
-    if not user:
-        return False
-
     result = users.update_one(
         {"telegram_id": telegram_id},
         {"$unset": {
@@ -258,6 +265,5 @@ def clear_player_info(telegram_id):
             "player_password": ""
         }}
     )
-
     return result.modified_count > 0
 
