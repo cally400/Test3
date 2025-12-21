@@ -1,13 +1,13 @@
-# webhook_app.py
 from flask import Flask, request, jsonify
 import telebot
 import os
+from threading import Thread
 from main import bot  # استيراد البوت من main.py
 
 app = Flask(__name__)
 
 # =========================
-# تهيئة التوكن
+# إعداد التوكن
 # =========================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -19,12 +19,10 @@ bot.token = TOKEN
 # إعداد Webhook
 # =========================
 WEBHOOK_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
-if not WEBHOOK_URL:
-    raise ValueError("❌ RAILWAY_PUBLIC_DOMAIN غير موجود!")
-
-bot.remove_webhook()
-bot.set_webhook(url=f"https://{WEBHOOK_URL}/webhook/{TOKEN}")
-print(f"✅ Webhook مضبوط على: https://{WEBHOOK_URL}/webhook/{TOKEN}")
+if WEBHOOK_URL:
+    bot.remove_webhook()
+    bot.set_webhook(url=f"https://{WEBHOOK_URL}/webhook/{TOKEN}")
+    print(f"✅ Webhook مضبوط على: https://{WEBHOOK_URL}/webhook/{TOKEN}")
 
 # =========================
 # مسار Webhook
@@ -33,17 +31,15 @@ print(f"✅ Webhook مضبوط على: https://{WEBHOOK_URL}/webhook/{TOKEN}")
 def telegram_webhook(token):
     if token != TOKEN:
         return 'Unauthorized', 401
-
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
-        try:
-            bot.process_new_updates([update])
-        except Exception as e:
-            print("❌ خطأ أثناء معالجة التحديث:", e)
+        Thread(target=process_update, args=(update,)).start()
         return 'OK', 200
-
     return 'Bad Request', 400
+
+def process_update(update):
+    bot.process_new_updates([update])
 
 # =========================
 # صفحة رئيسية
@@ -58,4 +54,16 @@ def index():
 @app.route('/health')
 def health_check():
     return jsonify({"status": "healthy", "service": "telegram-bot"})
+
+# =========================
+# تشغيل البوت في Thread منفصل (Polling كخيار احتياطي)
+# =========================
+def run_bot_polling():
+    if not WEBHOOK_URL:
+        bot.infinity_polling()
+
+if __name__ == '__main__':
+    Thread(target=run_bot_polling, daemon=True).start()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
 
