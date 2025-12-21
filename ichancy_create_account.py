@@ -1,4 +1,3 @@
-import os
 import random
 import string
 import db
@@ -41,9 +40,18 @@ def start_create_account(bot, call):
     message_id = call.message.message_id
     telegram_id = call.from_user.id
 
-    user = db.get_user(telegram_id)
+    # ✅ تجديد الجلسة قبل أي شيء
+    try:
+        api.ensure_login()
+    except Exception as e:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"❌ فشل تسجيل الدخول أو تجديد الجلسة:\n{str(e)}"
+        )
+        return
 
-    # ✅ الفحص الصحيح الوحيد
+    user = db.get_user(telegram_id)
     has_account = bool(user and user.get("player_id"))
 
     if has_account:
@@ -72,11 +80,7 @@ def start_create_account(bot, call):
 
 def process_username_step(bot, message, telegram_id):
     chat_id = message.chat.id
-
-    raw_username = ''.join(
-        c for c in message.text.strip()
-        if c.isalnum() or c in ['_', '-']
-    )
+    raw_username = ''.join(c for c in message.text.strip() if c.isalnum() or c in ['_', '-'])
 
     if len(raw_username) < 3:
         bot.send_message(chat_id, "❌ الاسم قصير جداً (3 أحرف على الأقل)")
@@ -88,29 +92,19 @@ def process_username_step(bot, message, telegram_id):
     )
 
     try:
-        # المرحلة 1
         update_progress(bot, chat_id, progress_msg.message_id, "التحقق من الاسم", 30)
-
         username = generate_username(raw_username)
-
-        # المرحلة 2
         update_progress(bot, chat_id, progress_msg.message_id, "الاسم متاح", 100)
 
         bot.send_message(
             chat_id,
-            f"✅ الاسم متاح: `{username}`\n\n"
-            f"🔐 الآن أرسل كلمة السر:\n"
-            f"- 8 أحرف على الأقل\n"
-            f"- أحرف كبيرة وصغيرة\n"
-            f"- أرقام",
+            f"✅ الاسم متاح: `{username}`\n\n🔐 الآن أرسل كلمة السر:\n- 8 أحرف على الأقل\n- أحرف كبيرة وصغيرة\n- أرقام",
             parse_mode="Markdown"
         )
 
         bot.register_next_step_handler_by_chat_id(
             chat_id,
-            lambda msg: process_password_step(
-                bot, msg, telegram_id, username, progress_msg.message_id
-            )
+            lambda msg: process_password_step(bot, msg, telegram_id, username, progress_msg.message_id)
         )
 
     except Exception as e:
@@ -128,36 +122,22 @@ def process_password_step(bot, message, telegram_id, username, progress_message_
     chat_id = message.chat.id
     password = message.text.strip()
 
-    if (
-        len(password) < 8 or
+    if (len(password) < 8 or
         not any(c.isupper() for c in password) or
         not any(c.islower() for c in password) or
-        not any(c.isdigit() for c in password)
-    ):
+        not any(c.isdigit() for c in password)):
         bot.send_message(chat_id, "❌ كلمة المرور غير مطابقة للشروط")
         return
 
     try:
-        # المرحلة 3
         update_progress(bot, chat_id, progress_message_id, "جاري إنشاء الحساب", 70)
-
         status, data, player_id, email = api.create_player_with_credentials(username, password)
 
         if status != 200 or not player_id:
             raise ValueError("فشل إنشاء الحساب")
 
-        # المرحلة 4
         update_progress(bot, chat_id, progress_message_id, "جاري حفظ البيانات", 90)
-
-        db.update_player_info(
-            telegram_id,
-            player_id,
-            username,
-            email,
-            password
-        )
-
-        # المرحلة 5
+        db.update_player_info(telegram_id, player_id, username, email, password)
         update_progress(bot, chat_id, progress_message_id, "تم إنشاء الحساب بنجاح", 100)
 
         bot.send_message(
