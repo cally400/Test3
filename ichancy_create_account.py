@@ -9,6 +9,7 @@ api = IChancyAPI()
 # =========================
 # Helpers
 # =========================
+
 def _random_suffix(length=3):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
@@ -42,14 +43,10 @@ def start_create_account(bot, call):
 
     user = db.get_user(telegram_id)
 
-    # تحقق من أن جميع بيانات iChancy موجودة
-    has_account = False
-    if user:
-        if user.get("player_id") and user.get("username") and user.get("email") and user.get("password"):
-            has_account = True
+    # ✅ الفحص الصحيح الوحيد
+    has_account = bool(user and user.get("player_id"))
 
     if has_account:
-        # المستخدم لديه حساب مكتمل
         bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
@@ -57,7 +54,7 @@ def start_create_account(bot, call):
         )
         return
 
-    # لا يملك حساب، عرض شاشة إنشاء الحساب
+    # ❌ لا يملك حساب
     bot.edit_message_text(
         chat_id=chat_id,
         message_id=message_id,
@@ -69,33 +66,35 @@ def start_create_account(bot, call):
         lambda msg: process_username_step(bot, msg, telegram_id)
     )
 
-
 # =========================
 # Username Step
 # =========================
+
 def process_username_step(bot, message, telegram_id):
     chat_id = message.chat.id
-    raw_username = ''.join(c for c in message.text.strip() if c.isalnum() or c in ['_', '-'])
+
+    raw_username = ''.join(
+        c for c in message.text.strip()
+        if c.isalnum() or c in ['_', '-']
+    )
 
     if len(raw_username) < 3:
         bot.send_message(chat_id, "❌ الاسم قصير جداً (3 أحرف على الأقل)")
         return
 
-    progress_msg = bot.send_message(chat_id, "⏳ جاري التحقق من الاسم:\n[░░░░░░░░░░] 0%")
+    progress_msg = bot.send_message(
+        chat_id,
+        "⏳ جاري التحقق من الاسم:\n[░░░░░░░░░░] 0%"
+    )
 
     try:
-        # المرحلة 1: تحقق من الحساب مسبقًا
-        update_progress(bot, chat_id, progress_msg.message_id, "التحقق من الحساب", 25)
-        if api.check_player_exists(raw_username):
-            bot.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text="✅ لديك حساب مسبق")
-            return
+        # المرحلة 1
+        update_progress(bot, chat_id, progress_msg.message_id, "التحقق من الاسم", 30)
 
-        # المرحلة 2: إنشاء اسم مستخدم فريد
-        update_progress(bot, chat_id, progress_msg.message_id, "إنشاء اسم مستخدم فريد", 50)
         username = generate_username(raw_username)
 
-        # المرحلة 3: جاهز لاستلام كلمة المرور
-        update_progress(bot, chat_id, progress_msg.message_id, "الاسم متاح، انتظر كلمة المرور", 75)
+        # المرحلة 2
+        update_progress(bot, chat_id, progress_msg.message_id, "الاسم متاح", 100)
 
         bot.send_message(
             chat_id,
@@ -109,15 +108,22 @@ def process_username_step(bot, message, telegram_id):
 
         bot.register_next_step_handler_by_chat_id(
             chat_id,
-            lambda msg: process_password_step(bot, msg, telegram_id, username, progress_msg.message_id)
+            lambda msg: process_password_step(
+                bot, msg, telegram_id, username, progress_msg.message_id
+            )
         )
 
     except Exception as e:
-        bot.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=f"❌ خطأ: {str(e)}")
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_msg.message_id,
+            text=f"❌ خطأ: {str(e)}"
+        )
 
 # =========================
 # Password Step
 # =========================
+
 def process_password_step(bot, message, telegram_id, username, progress_message_id):
     chat_id = message.chat.id
     password = message.text.strip()
@@ -132,18 +138,27 @@ def process_password_step(bot, message, telegram_id, username, progress_message_
         return
 
     try:
-        # المرحلة 4: إنشاء الحساب
-        update_progress(bot, chat_id, progress_message_id, "جاري إنشاء الحساب", 80)
+        # المرحلة 3
+        update_progress(bot, chat_id, progress_message_id, "جاري إنشاء الحساب", 70)
+
         status, data, player_id, email = api.create_player_with_credentials(username, password)
+
         if status != 200 or not player_id:
-            raise ValueError("❌ فشل إنشاء الحساب")
+            raise ValueError("فشل إنشاء الحساب")
 
-        # المرحلة 5: حفظ البيانات
+        # المرحلة 4
         update_progress(bot, chat_id, progress_message_id, "جاري حفظ البيانات", 90)
-        db.update_player_info(telegram_id, player_id, username, email, password)
 
-        # المرحلة 6: انتهى
-        update_progress(bot, chat_id, progress_message_id, "✅ تم إنشاء الحساب بنجاح", 100)
+        db.update_player_info(
+            telegram_id,
+            player_id,
+            username,
+            email,
+            password
+        )
+
+        # المرحلة 5
+        update_progress(bot, chat_id, progress_message_id, "تم إنشاء الحساب بنجاح", 100)
 
         bot.send_message(
             chat_id,
@@ -160,5 +175,9 @@ def process_password_step(bot, message, telegram_id, username, progress_message_
         )
 
     except Exception as e:
-        bot.edit_message_text(chat_id=chat_id, message_id=progress_message_id, text=f"❌ فشل إنشاء الحساب:\n{str(e)}")
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_message_id,
+            text=f"❌ فشل إنشاء الحساب:\n{str(e)}"
+        )
 
