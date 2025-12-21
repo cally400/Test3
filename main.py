@@ -276,28 +276,33 @@ def bonus_handler(message):
         parse_mode="Markdown"
     )
 @bot.message_handler(commands=['del'])
-def clear_player_info(telegram_id):
-    """
-    تصفير بيانات حساب iChancy للمستخدم مع الحفاظ على المستند في قاعدة البيانات
-    لتجنب DuplicateKeyError على player_id
-    """
-    from pymongo import MongoClient
-    import os
+def delete_user_data(message):
+    telegram_id = message.from_user.id
 
-    client = MongoClient(os.getenv("MONGODB_URI"))
-    db = client.get_database("ichancy_bot")
-    users_collection = db["users"]
+    try:
+        deleted = db.clear_player_info(telegram_id)
 
-    result = users_collection.update_one(
-        {"telegram_id": telegram_id},
-        {
-            "$set": {
-                "username": None,
-                "password": None,
-                "email": None,
-                "player_id": None
-            }
-        }
-    )
-    return result.modified_count > 0
+        if not deleted:
+            bot.send_message(
+                message.chat.id,
+                "ℹ️ لا توجد معلومات حساب محفوظة لديك."
+            )
+            return
 
+        bot.send_message(
+            message.chat.id,
+            "✅ تم حذف معلومات حسابك بنجاح.\n\n"
+            "🗑️ تم حذف:\n"
+            "- اسم المستخدم\n"
+            "- كلمة المرور\n"
+            "- البريد الإلكتروني\n"
+            "- معرف اللاعب\n\n"
+            "💡 يمكنك إنشاء حساب جديد في أي وقت."
+        )
+
+    except Exception as e:
+        bot.send_message(
+            message.chat.id,
+            "❌ حدث خطأ أثناء حذف البيانات."
+        )
+        print("DEL ERROR:", e)
