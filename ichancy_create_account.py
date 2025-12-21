@@ -34,6 +34,7 @@ def generate_username(raw_username: str) -> str:
 # =========================
 # Entry Point
 # =========================
+
 def start_create_account(bot, call):
     chat_id = call.message.chat.id
     message_id = call.message.message_id
@@ -41,7 +42,14 @@ def start_create_account(bot, call):
 
     user = db.get_user(telegram_id)
 
-    if user and user.get("player_id"):
+    # تحقق من أن جميع بيانات iChancy موجودة
+    has_account = False
+    if user:
+        if user.get("player_id") and user.get("username") and user.get("email") and user.get("password"):
+            has_account = True
+
+    if has_account:
+        # المستخدم لديه حساب مكتمل
         bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
@@ -49,6 +57,7 @@ def start_create_account(bot, call):
         )
         return
 
+    # لا يملك حساب، عرض شاشة إنشاء الحساب
     bot.edit_message_text(
         chat_id=chat_id,
         message_id=message_id,
@@ -59,6 +68,7 @@ def start_create_account(bot, call):
         chat_id,
         lambda msg: process_username_step(bot, msg, telegram_id)
     )
+
 
 # =========================
 # Username Step
