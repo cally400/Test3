@@ -256,14 +256,31 @@ def get_user_stats(telegram_id):
     }
 
 def clear_player_info(telegram_id):
-    result = users.update_one(
-        {"telegram_id": telegram_id},
-        {"$unset": {
-            "player_id": "",
-            "player_username": "",
-            "player_email": "",
-            "player_password": ""
-        }}
-    )
-    return result.modified_count > 0
+    """
+    حذف معلومات حساب iChancy للمستخدم بشكل آمن،
+    مع تفادي DuplicateKeyError عند player_id الفارغ أو null.
+    """
+    try:
+        # إزالة أي مستندات تحتوي على player_id = null (تجنّب تعارض الفهرس)
+        users.update_many(
+            {"player_id": None},
+            {"$unset": {"player_id": ""}}
+        )
+
+        # إلغاء بيانات اللاعب للمستخدم الحالي
+        result = users.update_one(
+            {"telegram_id": telegram_id},
+            {"$unset": {
+                "player_id": "",
+                "player_username": "",
+                "player_email": "",
+                "player_password": ""
+            }}
+        )
+
+        return result.modified_count > 0
+
+    except Exception as e:
+        print("❌ CLEAR_PLAYER_INFO ERROR:", e)
+        return False
 
