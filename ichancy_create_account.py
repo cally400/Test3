@@ -7,8 +7,11 @@ from ichancy_api import IChancyAPI
 api = IChancyAPI()
 
 # =========================
-# شريط التقدم
+# Helpers
 # =========================
+def _random_suffix(length=3):
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+
 def progress_bar(percent: int) -> str:
     filled = int(percent / 10)
     return f"[{'█' * filled}{'░' * (10 - filled)}] {percent}%"
@@ -20,12 +23,6 @@ def update_progress(bot, chat_id, message_id, title, percent):
         text=f"⏳ {title}\n{progress_bar(percent)}"
     )
 
-# =========================
-# إنشاء اسم مستخدم فريد
-# =========================
-def _random_suffix(length=3):
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
-
 def generate_username(raw_username: str) -> str:
     base = f"ZEUS_{raw_username}"
     for i in range(6):
@@ -35,15 +32,37 @@ def generate_username(raw_username: str) -> str:
     raise ValueError("❌ اسم المستخدم غير متاح، جرّب اسمًا آخر")
 
 # =========================
-# الخطوة الأولى: اسم المستخدم
+# Entry Point
 # =========================
 def start_create_account(bot, call):
-    bot.send_message(call.message.chat.id, "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):")
-    bot.register_next_step_handler_by_chat_id(
-        call.message.chat.id,
-        lambda msg: process_username_step(bot, msg, call.from_user.id)
+    chat_id = call.message.chat.id
+    message_id = call.message.message_id
+    telegram_id = call.from_user.id
+
+    user = db.get_user(telegram_id)
+
+    if user and user.get("player_id"):
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text="✅ لديك حساب مسبق بالفعل"
+        )
+        return
+
+    bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=message_id,
+        text="📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):"
     )
 
+    bot.register_next_step_handler_by_chat_id(
+        chat_id,
+        lambda msg: process_username_step(bot, msg, telegram_id)
+    )
+
+# =========================
+# Username Step
+# =========================
 def process_username_step(bot, message, telegram_id):
     chat_id = message.chat.id
     raw_username = ''.join(c for c in message.text.strip() if c.isalnum() or c in ['_', '-'])
@@ -52,15 +71,13 @@ def process_username_step(bot, message, telegram_id):
         bot.send_message(chat_id, "❌ الاسم قصير جداً (3 أحرف على الأقل)")
         return
 
-    # رسالة شريط التقدم
     progress_msg = bot.send_message(chat_id, "⏳ جاري التحقق من الاسم:\n[░░░░░░░░░░] 0%")
 
     try:
-        # المرحلة 1: تحقق من وجود الحساب مسبقًا
-        update_progress(bot, chat_id, progress_msg.message_id, "التحقق من وجود الاسم", 25)
+        # المرحلة 1: تحقق من الحساب مسبقًا
+        update_progress(bot, chat_id, progress_msg.message_id, "التحقق من الحساب", 25)
         if api.check_player_exists(raw_username):
-            bot.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id,
-                                  text="✅ لديك حساب مسبقًا")
+            bot.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text="✅ لديك حساب مسبق")
             return
 
         # المرحلة 2: إنشاء اسم مستخدم فريد
@@ -89,7 +106,7 @@ def process_username_step(bot, message, telegram_id):
         bot.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=f"❌ خطأ: {str(e)}")
 
 # =========================
-# الخطوة الثانية: كلمة المرور
+# Password Step
 # =========================
 def process_password_step(bot, message, telegram_id, username, progress_message_id):
     chat_id = message.chat.id
@@ -108,7 +125,6 @@ def process_password_step(bot, message, telegram_id, username, progress_message_
         # المرحلة 4: إنشاء الحساب
         update_progress(bot, chat_id, progress_message_id, "جاري إنشاء الحساب", 80)
         status, data, player_id, email = api.create_player_with_credentials(username, password)
-
         if status != 200 or not player_id:
             raise ValueError("❌ فشل إنشاء الحساب")
 
