@@ -278,20 +278,23 @@ def bonus_handler(message):
 @bot.message_handler(commands=['del'])
 def delete_user_data(message):
     telegram_id = message.from_user.id
+    chat_id = message.chat.id
 
     try:
-        deleted = db.clear_player_info(telegram_id)
-
-        if not deleted:
+        # 1️⃣ تحقق هل لديه حساب iChancy فعلي
+        if not db.has_ichancy_account(telegram_id):
             bot.send_message(
-                message.chat.id,
-                "ℹ️ لا توجد معلومات حساب محفوظة لديك."
+                chat_id,
+                "ℹ️ لا يوجد لديك حساب iChancy محفوظ."
             )
             return
 
+        # 2️⃣ حذف معلومات الحساب
+        db.clear_player_info(telegram_id)
+
         bot.send_message(
-            message.chat.id,
-            "✅ تم حذف معلومات حسابك بنجاح.\n\n"
+            chat_id,
+            "✅ تم حذف معلومات حساب iChancy بنجاح.\n\n"
             "🗑️ تم حذف:\n"
             "- اسم المستخدم\n"
             "- كلمة المرور\n"
@@ -302,7 +305,8 @@ def delete_user_data(message):
 
     except Exception as e:
         bot.send_message(
-            message.chat.id,
-            "❌ حدث خطأ أثناء حذف البيانات."
+            chat_id,
+            "❌ حدث خطأ أثناء حذف البيانات، يرجى المحاولة لاحقًا."
         )
-        print("DEL ERROR:", e)
+        print("❌ DEL ERROR:", e)
+
