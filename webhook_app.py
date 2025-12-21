@@ -7,7 +7,7 @@ from main import bot  # استيراد البوت من main.py
 app = Flask(__name__)
 
 # =========================
-# إعداد التوكن
+# تهيئة التوكن
 # =========================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -22,7 +22,6 @@ WEBHOOK_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
 if WEBHOOK_URL:
     bot.remove_webhook()
     bot.set_webhook(url=f"https://{WEBHOOK_URL}/webhook/{TOKEN}")
-    print(f"✅ Webhook مضبوط على: https://{WEBHOOK_URL}/webhook/{TOKEN}")
 
 # =========================
 # مسار Webhook
@@ -56,14 +55,18 @@ def health_check():
     return jsonify({"status": "healthy", "service": "telegram-bot"})
 
 # =========================
-# تشغيل البوت في Thread منفصل (Polling كخيار احتياطي)
+# تشغيل البوت في Thread منفصل
 # =========================
 def run_bot_polling():
+    # إذا لم يكن هناك Webhook، استخدم polling كخيار بديل
     if not WEBHOOK_URL:
         bot.infinity_polling()
 
 if __name__ == '__main__':
+    # تشغيل البوت في Thread حتى لا يمنع Flask من العمل
     Thread(target=run_bot_polling, daemon=True).start()
+
+    # تشغيل Flask
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
 
