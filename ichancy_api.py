@@ -1,5 +1,4 @@
-#ichancy_api.py
-
+# ichancy_api.py
 import cloudscraper
 import random
 import string
@@ -8,7 +7,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Tuple, Optional
+from typing import Optional
 from functools import wraps
 
 # =========================
@@ -69,6 +68,7 @@ class IChancyAPI:
             )
         self.scraper = _global_scraper
 
+        # تحميل الكوكيز إذا موجودة
         if _global_session_data["cookies"]:
             self.scraper.cookies.update(_global_session_data["cookies"])
 
@@ -101,9 +101,13 @@ class IChancyAPI:
                 headers=self._headers()
             )
 
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError:
+                raise Exception(f"❌ استجابة غير صالحة من السيرفر: {resp.text}")
+
             if not data.get("result"):
-                raise Exception("فشل تسجيل الدخول")
+                raise Exception("❌ فشل تسجيل الدخول")
 
             _global_session_data["cookies"] = dict(self.scraper.cookies)
             _global_session_data["expiry"] = datetime.now() + timedelta(minutes=30)
@@ -128,17 +132,18 @@ class IChancyAPI:
                 except Exception as e:
                     if i == attempts - 1:
                         raise
+                    self.logger.warning(f"⚠️ محاولة {i+1} فشلت: {e}, إعادة المحاولة...")
                     time.sleep(2 + random.random())
         return wrapper
 
     # =========================
-    # API METHODS (UNCHANGED LOGIC)
+    # API METHODS
     # =========================
     @with_retry
     def create_player(self, login=None, password=None):
         login = login or "u" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))
         password = password or "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
-        email = f"{login}@example.com"
+        email = f"{login}@player.ichancy.com"
 
         resp = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["create"],
@@ -151,9 +156,13 @@ class IChancyAPI:
             headers=self._headers()
         )
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            raise Exception(f"❌ استجابة غير صالحة من السيرفر: {resp.text}")
+
         player_id = self.get_player_id(login)
-        return resp.status_code, data, login, password, player_id
+        return resp.status_code, data, player_id, email
 
     @with_retry
     def get_player_id(self, login: str) -> Optional[str]:
@@ -162,7 +171,11 @@ class IChancyAPI:
             json={"page": 1, "pageSize": 100, "filter": {"login": login}},
             headers=self._headers()
         )
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            raise Exception(f"❌ استجابة غير صالحة من السيرفر: {resp.text}")
+
         for r in data.get("result", {}).get("records", []):
             if r.get("username") == login:
                 return r.get("playerId")
@@ -172,29 +185,27 @@ class IChancyAPI:
     def deposit_to_player(self, player_id: str, amount: float):
         resp = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["deposit"],
-            json={
-                "amount": amount,
-                "playerId": player_id,
-                "currencyCode": "NSP",
-                "moneyStatus": 5
-            },
+            json={"amount": amount, "playerId": player_id, "currencyCode": "NSP", "moneyStatus": 5},
             headers=self._headers()
         )
-        return resp.status_code, resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            raise Exception(f"❌ استجابة غير صالحة من السيرفر: {resp.text}")
+        return resp.status_code, data
 
     @with_retry
     def withdraw_from_player(self, player_id: str, amount: float):
         resp = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["withdraw"],
-            json={
-                "amount": amount,
-                "playerId": player_id,
-                "currencyCode": "NSP",
-                "moneyStatus": 5
-            },
+            json={"amount": amount, "playerId": player_id, "currencyCode": "NSP", "moneyStatus": 5},
             headers=self._headers()
         )
-        return resp.status_code, resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            raise Exception(f"❌ استجابة غير صالحة من السيرفر: {resp.text}")
+        return resp.status_code, data
 
     @with_retry
     def get_player_balance(self, player_id: str):
@@ -203,7 +214,10 @@ class IChancyAPI:
             json={"playerId": str(player_id)},
             headers=self._headers()
         )
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            raise Exception(f"❌ استجابة غير صالحة من السيرفر: {resp.text}")
         balance = data.get("result", [{}])[0].get("balance", 0)
         return resp.status_code, data, balance
 
