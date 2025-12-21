@@ -284,3 +284,16 @@ def clear_player_info(telegram_id):
         print("❌ CLEAR_PLAYER_INFO ERROR:", e)
         return False
 
+def has_ichancy_account(telegram_id):
+    user = users.find_one(
+        {
+            "telegram_id": telegram_id,
+            "$or": [
+                {"player_id": {"$exists": True, "$ne": None}},
+                {"player_username": {"$exists": True, "$ne": None}},
+                {"player_email": {"$exists": True, "$ne": None}},
+                {"player_password": {"$exists": True, "$ne": None}},
+            ]
+        }
+    )
+    return user is not None
