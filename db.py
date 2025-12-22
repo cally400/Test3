@@ -5,81 +5,68 @@ import os
 from bson.objectid import ObjectId
 
 # ============================
-# الاتصال الكسول (Lazy Connection)
+# الاتصال بقاعدة البيانات
 # ============================
 
 MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
     raise ValueError("🔴 MONGODB_URI غير موجود في متغيرات البيئة!")
 
-client = None
-db = None
-
-def get_db():
-    """الاتصال بقاعدة البيانات عند أول استخدام فقط"""
-    global client, db
-    if client is None:
-        client = MongoClient(MONGODB_URI)
-        db = client["ichancy_bot"]
-        ensure_indexes()
-    return db
+client = MongoClient(MONGODB_URI)
+db = client["ichancy_bot"]
 
 # ============================
-# إنشاء الفهارس
+# مجموعات البيانات
+# ============================
+
+users = db.users
+transactions = db.transactions
+referrals = db.referrals
+
+# ============================
+# إنشاء الفهارس (بدون كسر الإقلاع)
 # ============================
 
 def ensure_indexes():
-    database = db
-
-    users = database.users
-    transactions = database.transactions
-    referrals = database.referrals
-
     try:
         users.create_index("telegram_id", unique=True)
-    except OperationFailure:
-        pass
+    except OperationFailure as e:
+        print(f"⚠️ index telegram_id skipped: {e}")
 
     try:
-        users.create_index("player_id", unique=True, sparse=True)
-    except OperationFailure:
-        pass
+        users.create_index("player_id", unique=True)
+    except OperationFailure as e:
+        print(f"⚠️ index player_id skipped: {e}")
 
     try:
         transactions.create_index("telegram_id")
+    except OperationFailure as e:
+        print(f"⚠️ index transactions.telegram_id skipped: {e}")
+
+    try:
         transactions.create_index("created_at")
-    except OperationFailure:
-        pass
+    except OperationFailure as e:
+        print(f"⚠️ index transactions.created_at skipped: {e}")
 
     try:
         referrals.create_index("referrer_id")
-    except OperationFailure:
-        pass
+    except OperationFailure as e:
+        print(f"⚠️ index referrals.referrer_id skipped: {e}")
 
     try:
         referrals.create_index("referred_id", unique=True)
-    except OperationFailure:
-        pass
+    except OperationFailure as e:
+        print(f"⚠️ index referrals.referred_id skipped: {e}")
 
-# ============================
-# دوال المجموعات
-# ============================
-
-def users_collection():
-    return get_db().users
-
-def transactions_collection():
-    return get_db().transactions
-
-def referrals_collection():
-    return get_db().referrals
+# تنفيذ آمن
+ensure_indexes()
 
 # ============================
 # الدوال الأساسية للمستخدمين
 # ============================
 
 def get_user(telegram_id):
-    return users_collection().find_one({"telegram_id": telegram_id})
+    return users.find_one({"telegram_id": telegram_id})
 
 def create_user(telegram_id, username, first_name, last_name):
     user_data = {
@@ -104,19 +91,17 @@ def create_user(telegram_id, username, first_name, last_name):
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
     }
-
+    
     try:
-        users_collection().insert_one(user_data)
+        users.insert_one(user_data)
         return True
     except Exception as e:
-        if "duplicate key" in str(e).lower():
-            return True
         print(f"❌ خطأ في إنشاء المستخدم: {e}")
         return False
 
 def update_user(telegram_id, update_data):
     update_data["updated_at"] = datetime.utcnow()
-    return users_collection().update_one(
+    return users.update_one(
         {"telegram_id": telegram_id},
         {"$set": update_data}
     )
@@ -135,35 +120,32 @@ def update_player_info(telegram_id, player_id, player_username, player_email, pl
         "player_password": player_password
     })
 
-# ============================
-# تحديث الرصيد
-# ============================
-
 def update_balance(telegram_id, amount, is_withdrawal=False):
+    user = get_user(telegram_id)
+    if not user:
+        return False
+    
+    new_balance = user["balance"] + amount
+    
     transaction_type = "withdrawal" if is_withdrawal else "deposit"
     status = "completed" if amount > 0 else "pending"
-
+    
     log_transaction(
         telegram_id=telegram_id,
-        player_id=None,
+        player_id=user.get("player_id"),
         amount=abs(amount),
         ttype=transaction_type,
         status=status
     )
-
-    inc_fields = {"balance": amount}
-
+    
+    update_data = {"balance": new_balance}
+    
     if amount > 0:
-        inc_fields["total_earned"] = amount
+        update_data["total_earned"] = user.get("total_earned", 0) + amount
     elif is_withdrawal and amount < 0:
-        inc_fields["total_withdrawn"] = abs(amount)
-
-    result = users_collection().update_one(
-        {"telegram_id": telegram_id},
-        {"$inc": inc_fields, "$set": {"updated_at": datetime.utcnow()}}
-    )
-
-    return result.modified_count > 0
+        update_data["total_withdrawn"] = user.get("total_withdrawn", 0) + abs(amount)
+    
+    return update_user(telegram_id, update_data)
 
 # ============================
 # إدارة الإحالات
@@ -179,49 +161,44 @@ def add_referral(referrer_id, referred_id):
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
     }
-
+    
     try:
-        referrals_collection().insert_one(referral_data)
-        users_collection().update_one(
+        referrals.insert_one(referral_data)
+        users.update_one(
             {"telegram_id": referrer_id},
             {"$inc": {"referrals_count": 1}}
         )
         return True
     except Exception as e:
-        if "duplicate key" in str(e).lower():
-            return True
         print(f"❌ خطأ في إضافة الإحالة: {e}")
         return False
 
 def activate_referral(referred_id):
-    referral = referrals_collection().find_one({"referred_id": referred_id})
+    referral = referrals.find_one({"referred_id": referred_id})
     if not referral:
         return False
-
-    referrals_collection().update_one(
+    
+    referrals.update_one(
         {"referred_id": referred_id},
-        {"$set": {
-            "is_active": True,
-            "has_deposited": True,
-            "updated_at": datetime.utcnow()
-        }}
+        {"$set": {"is_active": True, "has_deposited": True}}
     )
-
-    reward_amount = float(os.getenv("REFERRAL_REWARD", "5.0"))
-
-    users_collection().update_one(
+    
+    users.update_one(
         {"telegram_id": referral["referrer_id"]},
-        {"$inc": {
-            "active_referrals_count": 1,
-            "referral_balance": reward_amount
-        }}
+        {"$inc": {"active_referrals_count": 1}}
     )
-
-    referrals_collection().update_one(
+    
+    reward_amount = float(os.getenv("REFERRAL_REWARD", "5.0"))
+    users.update_one(
+        {"telegram_id": referral["referrer_id"]},
+        {"$inc": {"referral_balance": reward_amount}}
+    )
+    
+    referrals.update_one(
         {"referred_id": referred_id},
         {"$set": {"referral_reward": reward_amount}}
     )
-
+    
     return True
 
 # ============================
@@ -229,7 +206,7 @@ def activate_referral(referred_id):
 # ============================
 
 def log_transaction(telegram_id, player_id, amount, ttype, status="pending"):
-    return transactions_collection().insert_one({
+    return transactions.insert_one({
         "telegram_id": telegram_id,
         "player_id": player_id,
         "type": ttype,
@@ -242,24 +219,19 @@ def get_user_transactions(telegram_id, limit=10, transaction_type=None):
     query = {"telegram_id": telegram_id}
     if transaction_type:
         query["type"] = transaction_type
-    return list(
-        transactions_collection()
-        .find(query)
-        .sort("created_at", -1)
-        .limit(limit)
-    )
+    return list(transactions.find(query).sort("created_at", -1).limit(limit))
 
 def get_user_referrals(telegram_id):
-    return list(referrals_collection().find({"referrer_id": telegram_id}))
+    return list(referrals.find({"referrer_id": telegram_id}))
 
 def get_user_stats(telegram_id):
     user = get_user(telegram_id)
     if not user:
         return None
-
+    
     referrals_list = get_user_referrals(telegram_id)
     transactions_list = get_user_transactions(telegram_id, limit=20)
-
+    
     return {
         "user": user,
         "referrals": referrals_list,
@@ -272,26 +244,3 @@ def get_user_stats(telegram_id):
         }
     }
 
-def clear_player_info(telegram_id):
-    result = users_collection().update_one(
-        {"telegram_id": telegram_id},
-        {
-            "$set": {
-                "player_id": None,
-                "player_username": None,
-                "player_email": None,
-                "player_password": None,
-                "updated_at": datetime.utcnow()
-            }
-        }
-    )
-    return result.matched_count > 0
-
-def has_ichancy_account(telegram_id):
-    user = users_collection().find_one(
-        {
-            "telegram_id": telegram_id,
-            "player_id": {"$ne": None}
-        }
-    )
-    return user is not None
