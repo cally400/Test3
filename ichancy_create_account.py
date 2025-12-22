@@ -4,12 +4,19 @@ import random
 import string
 import re
 
-api = IChancyAPI()
+# لا تنشئ API عند الاستيراد
+# api = IChancyAPI()  ← ❌ ممنوع
+
+def get_api():
+    """إنشاء API فقط عند الحاجة"""
+    return IChancyAPI()
 
 def _random_suffix(length=3):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 def generate_username(base):
+    api = get_api()  # ← إنشاء API هنا فقط
+
     base = base.replace(" ", "_")
     base = re.sub(r'[^A-Za-z0-9_-]', '', base)
 
@@ -51,6 +58,7 @@ def create_account(bot, msg, username):
 
     bot.send_message(msg.chat.id, "⏳ جاري إنشاء الحساب...")
 
+    api = get_api()  # ← إنشاء API هنا فقط
     status, data, player_id, email = api.create_player_with_credentials(username, password)
 
     if status != 200 or not player_id:
