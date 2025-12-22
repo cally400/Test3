@@ -6,4 +6,4 @@ python-dotenv==1.0.0
 requests==2.31.0
 pickle-mixin==1.0.2
 pymongo==4.3.3
-
+playwright
