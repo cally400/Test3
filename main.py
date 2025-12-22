@@ -1,11 +1,14 @@
-import os
+from ichancy_api import IChancyAPI
+import ichancy_create_account as ichancy_create
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-
+import os
 import db
-import ichancy_deposit
-import ichancy_withdraw
-import ichancy_create_account as ichancy_create
+
+# =========================
+# تهيئة API
+# =========================
+api = IChancyAPI()
 
 # =========================
 # تهيئة البوت
@@ -79,7 +82,6 @@ def send_welcome(message):
     user_id = message.from_user.id
     user = db.get_user(user_id)
     referral_id = None
-
     if len(message.text.split()) > 1:
         try:
             referral_id = int(message.text.split()[1])
@@ -138,8 +140,7 @@ def show_terms(message, user_id, referral_id=None):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("check_join"))
 def handle_check_join(call):
     referral_id = call.data.split(":")[1]
-    referral_id = int(referral_id) if referral_id and referral_id.isdigit() else None
-
+    referral_id = int(referral_id) if referral_id.isdigit() else None
     if check_channel_membership(CHANNEL_ID, call.from_user.id):
         db.mark_channel_joined(call.from_user.id)
         show_terms(call.message, call.from_user.id, referral_id)
@@ -155,13 +156,11 @@ def handle_accept_terms(call):
     parts = call.data.split(":")
     user_id = int(parts[1])
     referral_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
-
     if call.from_user.id != user_id:
         return
 
     user = db.get_user(user_id)
     is_new_user = False
-
     if not user:
         db.create_user(
             telegram_id=user_id,
@@ -170,13 +169,11 @@ def handle_accept_terms(call):
             last_name=call.from_user.last_name
         )
         is_new_user = True
-
         if referral_id and referral_id != user_id:
             db.add_referral(referral_id, user_id)
 
     db.accept_terms(user_id)
     bot.edit_message_text("✅ تم قبول الشروط", call.message.chat.id, call.message.message_id)
-
     if is_new_user:
         show_main_menu(call.message)
 
@@ -196,16 +193,8 @@ def handle_ichancy(call):
     if not user:
         bot.answer_callback_query(call.id, "❌ المستخدم غير موجود")
         return
-
-    has_account = all([
-        user.get("player_id"),
-        user.get("player_email"),
-        user.get("player_username"),
-        user.get("player_password")
-    ])
-
+    has_account = all([user.get("player_id"), user.get("player_email"), user.get("player_username"), user.get("player_password")])
     keyboard = InlineKeyboardMarkup(row_width=1)
-
     if has_account:
         keyboard.add(
             InlineKeyboardButton("💰 تعبئة رصيد في الموقع", callback_data="ichancy_deposit"),
@@ -217,27 +206,13 @@ def handle_ichancy(call):
             InlineKeyboardButton("➕ إنشاء حساب iChancy", callback_data="ichancy_create")
         )
         text = "🎮 **I Chancy**\n\n❌ لا يوجد لديك حساب في الموقع\n\nاضغط على إنشاء حساب للمتابعة:"
-
     keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="back_main"))
-
-    bot.edit_message_text(
-        text=text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        reply_markup=keyboard,
-        parse_mode="Markdown"
-    )
+    bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=keyboard, parse_mode="Markdown")
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda c: c.data == "back_main")
 def handle_back_main(call):
-    bot.edit_message_text(
-        "🏠 **القائمة الرئيسية**",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=build_main_menu(),
-        parse_mode="Markdown"
-    )
+    bot.edit_message_text("🏠 **القائمة الرئيسية**", call.message.chat.id, call.message.message_id, reply_markup=build_main_menu(), parse_mode="Markdown")
     bot.answer_callback_query(call.id)
 
 # =========================
@@ -247,82 +222,3 @@ def handle_back_main(call):
 def handle_ichancy_create(call):
     ichancy_create.start_create_account(bot, call)
 
-# =========================
-# تعبئة حساب iChancy
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data == "ichancy_deposit")
-def ichancy_deposit_handler(call):
-    ichancy_deposit.start_deposit(bot, call)
-    bot.answer_callback_query(call.id)
-
-# =========================
-# سحب حساب iChancy
-# =========================
-@bot.callback_query_handler(func=lambda c: c.data == "ichancy_withdraw")
-def ichancy_withdraw_handler(call):
-    ichancy_withdraw.start_withdraw(bot, call)
-    bot.answer_callback_query(call.id)
-
-# =========================
-# BONUS
-# =========================
-@bot.message_handler(commands=['bonus'])
-def bonus_handler(message):
-    telegram_id = message.from_user.id
-    user = db.get_user(telegram_id)
-
-    if not user:
-        bot.send_message(message.chat.id, "❌ المستخدم غير موجود")
-        return
-
-    BONUS_AMOUNT = 1000
-    new_balance = user.get("balance", 0) + BONUS_AMOUNT
-
-    db.update_user(telegram_id, {"balance": new_balance})
-
-    db.log_transaction(
-        telegram_id=telegram_id,
-        player_id=user.get("player_id"),
-        amount=BONUS_AMOUNT,
-        ttype="bonus",
-        status="completed"
-    )
-
-    bot.send_message(
-        message.chat.id,
-        f"""🎁 **تمت إضافة مكافأة!**
-
-💰 المبلغ: `{BONUS_AMOUNT}`
-💳 رصيدك الحالي: `{new_balance}`""",
-        parse_mode="Markdown"
-    )
-
-# =========================
-# DELETE ACCOUNT
-# =========================
-@bot.message_handler(commands=['del'])
-def delete_user_data(message):
-    telegram_id = message.from_user.id
-    chat_id = message.chat.id
-
-    try:
-        if not db.has_ichancy_account(telegram_id):
-            bot.send_message(chat_id, "ℹ️ لا يوجد لديك حساب iChancy محفوظ.")
-            return
-
-        db.clear_player_info(telegram_id)
-
-        bot.send_message(
-            chat_id,
-            "✅ تم حذف معلومات حساب iChancy بنجاح.\n\n"
-            "🗑️ تم حذف:\n"
-            "- اسم المستخدم\n"
-            "- كلمة المرور\n"
-            "- البريد الإلكتروني\n"
-            "- معرف اللاعب\n\n"
-            "💡 يمكنك إنشاء حساب جديد في أي وقت."
-        )
-
-    except Exception as e:
-        bot.send_message(chat_id, "❌ حدث خطأ أثناء حذف البيانات.")
-        print("DEL ERROR:", e)
