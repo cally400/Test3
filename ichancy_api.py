@@ -12,13 +12,8 @@ class IChancyAPI:
         self._setup_logging()
         self._load_config()
 
-        self.scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'windows',
-                'mobile': False
-            }
-        )
+        # لا تنشئ scraper هنا حتى لا يعلّق عند الاستيراد
+        self.scraper = None
 
         self.is_logged_in = False
         self.session_expiry = None
@@ -74,10 +69,26 @@ class IChancyAPI:
 
         return True
 
+    def _get_scraper(self):
+        """
+        إنشاء cloudscraper فقط عند أول استخدام
+        بدل ما يكون في __init__ ويعلق الـ worker
+        """
+        if self.scraper is None:
+            self.scraper = cloudscraper.create_scraper(
+                browser={
+                    'browser': 'chrome',
+                    'platform': 'windows',
+                    'mobile': False
+                }
+            )
+        return self.scraper
+
     def login(self):
         payload = {"username": self.USERNAME, "password": self.PASSWORD}
 
-        resp = self.scraper.post(
+        scraper = self._get_scraper()
+        resp = scraper.post(
             self.ORIGIN + self.ENDPOINTS['signin'],
             json=payload,
             headers=self._headers()
@@ -145,7 +156,8 @@ class IChancyAPI:
             }
         }
 
-        resp = self.scraper.post(
+        scraper = self._get_scraper()
+        resp = scraper.post(
             self.ORIGIN + self.ENDPOINTS['create'],
             json=payload,
             headers=self._headers()
@@ -163,7 +175,8 @@ class IChancyAPI:
     def get_player_id(self, login):
         payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
 
-        resp = self.scraper.post(
+        scraper = self._get_scraper()
+        resp = scraper.post(
             self.ORIGIN + self.ENDPOINTS['statistics'],
             json=payload,
             headers=self._headers()
@@ -193,7 +206,8 @@ class IChancyAPI:
             }
         }
 
-        resp = self.scraper.post(
+        scraper = self._get_scraper()
+        resp = scraper.post(
             self.ORIGIN + self.ENDPOINTS['create'],
             json=payload,
             headers=self._headers()
@@ -211,7 +225,8 @@ class IChancyAPI:
     def check_player_exists(self, login):
         payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
 
-        resp = self.scraper.post(
+        scraper = self._get_scraper()
+        resp = scraper.post(
             self.ORIGIN + self.ENDPOINTS['statistics'],
             json=payload,
             headers=self._headers()
@@ -235,7 +250,8 @@ class IChancyAPI:
             "moneyStatus": 5
         }
 
-        resp = self.scraper.post(
+        scraper = self._get_scraper()
+        resp = scraper.post(
             self.ORIGIN + self.ENDPOINTS['deposit'],
             json=payload,
             headers=self._headers()
@@ -257,7 +273,8 @@ class IChancyAPI:
             "moneyStatus": 5
         }
 
-        resp = self.scraper.post(
+        scraper = self._get_scraper()
+        resp = scraper.post(
             self.ORIGIN + self.ENDPOINTS['withdraw'],
             json=payload,
             headers=self._headers()
@@ -272,7 +289,8 @@ class IChancyAPI:
     def get_player_balance(self, player_id):
         payload = {"playerId": str(player_id)}
 
-        resp = self.scraper.post(
+        scraper = self._get_scraper()
+        resp = scraper.post(
             self.ORIGIN + self.ENDPOINTS['balance'],
             json=payload,
             headers=self._headers()
