@@ -62,11 +62,3 @@ def run_bot_polling():
     if not WEBHOOK_URL:
         bot.infinity_polling()
 
-if __name__ == '__main__':
-    # تشغيل البوت في Thread حتى لا يمنع Flask من العمل
-    Thread(target=run_bot_polling, daemon=True).start()
-
-    # تشغيل Flask
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
-
