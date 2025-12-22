@@ -2,6 +2,9 @@ import json
 import requests
 import os
 
+print("📁 Current working directory:", os.getcwd())
+print("📂 Files in directory:", os.listdir())
+
 def load_cookies_into_session(session: requests.Session) -> bool:
     """
     تحميل الكوكيز من ملف ichancy_cookies.json
