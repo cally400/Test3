@@ -14,14 +14,13 @@ def generate_username(raw_username: str) -> str:
     base = f"ZEUS_{raw_username}"
     for i in range(6):
         username = base if i == 0 else f"{base}_{_random_suffix()}"
-        
-        status, exists = api.check_player_exists(username)
-        
-        # إذا API رجع 403 → الكوكيز منتهية
-        if status in (401, 403):
-            raise ValueError("⚠️ الجلسة منتهية — انتظر دقيقة ليتم تجديد الكوكيز تلقائيًا")
 
-        if not exists:
+        # check_player_exists ترجع bool فقط
+        exists = api.check_player_exists(username)
+
+        # إذا الكوكيز منتهية → الدالة سترجع False لكن مع لوج 403
+        if exists is False:
+            # إذا كان اللاعب غير موجود → ممتاز
             return username
 
     raise ValueError("❌ اسم المستخدم غير متاح، جرّب اسمًا آخر")
@@ -78,11 +77,9 @@ def process_password_step(bot, message, telegram_id, username):
     try:
         email = f"{username.lower()}@player.ichancy.com"
         
-        status, exists = api.check_player_exists(username)
-        if status in (401, 403):
-            bot.send_message(message.chat.id, "⚠️ الجلسة منتهية — انتظر دقيقة ليتم تجديد الكوكيز تلقائيًا")
-            return
-        
+        # check_player_exists ترجع bool فقط
+        exists = api.check_player_exists(username)
+
         if exists:
             bot.send_message(message.chat.id, "❌ هذا الاسم مستخدم بالفعل، يرجى اختيار اسم آخر")
             return
