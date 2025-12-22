@@ -36,34 +36,53 @@ def check_channel_membership(chat_id, user_id):
         return False
 
 # =========================
-# القائمة الرئيسية
+# القائمة الرئيسية (حسب الطلب)
 # =========================
 def build_main_menu():
     kb = InlineKeyboardMarkup(row_width=2)
+    
+    # I chancy - زر واحد
     kb.add(InlineKeyboardButton("🎮 I Chancy", callback_data="ichancy"))
+    
+    # سحب رصيد / شحن رصيد - زرين بجانب بعض
     kb.row(
         InlineKeyboardButton("💸 سحب رصيد", callback_data="withdraw"),
         InlineKeyboardButton("💰 شحن رصيد", callback_data="deposit")
     )
+    
+    # نظام الإحالات - زر واحد
     kb.add(InlineKeyboardButton("👥 نظام الإحالات", callback_data="referrals"))
+    
+    # كود هدية / اهداء رصيد - زرين
     kb.row(
         InlineKeyboardButton("🎁 كود هدية", callback_data="gift_code"),
         InlineKeyboardButton("💝 اهداء رصيد", callback_data="gift_balance")
     )
+    
+    # تواصل معنا / رسالة للادمن - زرين
     kb.row(
         InlineKeyboardButton("📞 تواصل معنا", callback_data="contact"),
         InlineKeyboardButton("✉️ رسالة للادمن", callback_data="admin_msg")
     )
+    
+    # الشروحات / السجل - زرين
     kb.row(
         InlineKeyboardButton("📚 الشروحات", callback_data="tutorials"),
         InlineKeyboardButton("📜 السجل", callback_data="transactions")
     )
+    
+    # ichancy apk / Vpn لتشغيل كافة اقسام الموقع - زرين
     kb.row(
         InlineKeyboardButton("📱 IChancy APK", callback_data="apk"),
         InlineKeyboardButton("🛡 VPN", callback_data="vpn")
     )
+    
+    # الشروط والاحكام - زر واحد
     kb.add(InlineKeyboardButton("📄 الشروط والاحكام", callback_data="terms"))
+    
+    # الجاكبوت - زر واحد
     kb.add(InlineKeyboardButton("🎰 الجاكبوت", callback_data="jackpot"))
+    
     return kb
 
 def show_main_menu(message):
@@ -81,6 +100,7 @@ def show_main_menu(message):
 def send_welcome(message):
     user_id = message.from_user.id
     user = db.get_user(user_id)
+
     referral_id = None
     if len(message.text.split()) > 1:
         try:
@@ -88,17 +108,21 @@ def send_welcome(message):
         except:
             pass
 
+    # مستخدم جديد
     if not user:
         if not check_channel_membership(CHANNEL_ID, user_id):
             show_channel_requirement(message, referral_id)
             return
+
         show_terms(message, user_id, referral_id)
         return
 
+    # لم يقبل الشروط
     if not user.get("accepted_terms"):
         show_terms(message, user_id)
         return
 
+    # لم يتم توثيق الاشتراك
     if not user.get("joined_channel"):
         if not check_channel_membership(CHANNEL_ID, user_id):
             show_channel_requirement(message)
@@ -108,7 +132,7 @@ def send_welcome(message):
     show_main_menu(message)
 
 # =========================
-# الاشتراك بالقناة
+# رسالة الاشتراك
 # =========================
 def show_channel_requirement(message, referral_id=None):
     kb = InlineKeyboardMarkup()
@@ -116,7 +140,11 @@ def show_channel_requirement(message, referral_id=None):
         InlineKeyboardButton("🔗 انضم للقناة", url=CHANNEL_INVITE_LINK),
         InlineKeyboardButton("✅ تحقق", callback_data=f"check_join:{referral_id}")
     )
-    bot.send_message(message.chat.id, "📢 يجب الاشتراك بالقناة أولاً", reply_markup=kb)
+    bot.send_message(
+        message.chat.id,
+        "📢 يجب الاشتراك بالقناة أولاً",
+        reply_markup=kb
+    )
 
 # =========================
 # الشروط
@@ -127,6 +155,7 @@ def show_terms(message, user_id, referral_id=None):
         InlineKeyboardButton("✅ أوافق", callback_data=f"accept_terms:{user_id}:{referral_id}"),
         InlineKeyboardButton("❌ أرفض", callback_data=f"reject_terms:{user_id}")
     )
+
     bot.send_message(
         message.chat.id,
         "📜 **شروط الخدمة**\n\n- باستخدامك للبوت فأنت توافق على الشروط",
@@ -141,6 +170,7 @@ def show_terms(message, user_id, referral_id=None):
 def handle_check_join(call):
     referral_id = call.data.split(":")[1]
     referral_id = int(referral_id) if referral_id.isdigit() else None
+
     if check_channel_membership(CHANNEL_ID, call.from_user.id):
         db.mark_channel_joined(call.from_user.id)
         show_terms(call.message, call.from_user.id, referral_id)
@@ -149,18 +179,20 @@ def handle_check_join(call):
         bot.answer_callback_query(call.id, "❌ غير مشترك")
 
 # =========================
-# قبول الشروط
+# قبول الشروط (مهم)
 # =========================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("accept_terms"))
 def handle_accept_terms(call):
     parts = call.data.split(":")
     user_id = int(parts[1])
     referral_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+
     if call.from_user.id != user_id:
         return
 
     user = db.get_user(user_id)
     is_new_user = False
+
     if not user:
         db.create_user(
             telegram_id=user_id,
@@ -169,11 +201,19 @@ def handle_accept_terms(call):
             last_name=call.from_user.last_name
         )
         is_new_user = True
+
         if referral_id and referral_id != user_id:
             db.add_referral(referral_id, user_id)
 
     db.accept_terms(user_id)
-    bot.edit_message_text("✅ تم قبول الشروط", call.message.chat.id, call.message.message_id)
+
+    bot.edit_message_text(
+        "✅ تم قبول الشروط",
+        call.message.chat.id,
+        call.message.message_id
+    )
+
+    # 🔥 إرسال القائمة فقط إذا كان جديد
     if is_new_user:
         show_main_menu(call.message)
 
@@ -185,39 +225,73 @@ def handle_reject_terms(call):
     bot.send_message(call.message.chat.id, "❌ لا يمكن استخدام البوت بدون قبول الشروط")
 
 # =========================
-# I Chancy
+# معالجة I Chancy
 # =========================
 @bot.callback_query_handler(func=lambda c: c.data == "ichancy")
 def handle_ichancy(call):
     user = db.get_user(call.from_user.id)
+
     if not user:
         bot.answer_callback_query(call.id, "❌ المستخدم غير موجود")
         return
-    has_account = all([user.get("player_id"), user.get("player_email"), user.get("player_username"), user.get("player_password")])
+
+    has_account = all([
+        user.get("player_id"),
+        user.get("player_email"),
+        user.get("player_username"),
+        user.get("player_password")
+    ])
+
     keyboard = InlineKeyboardMarkup(row_width=1)
+
     if has_account:
         keyboard.add(
             InlineKeyboardButton("💰 تعبئة رصيد في الموقع", callback_data="ichancy_deposit"),
             InlineKeyboardButton("💸 سحب رصيد من الموقع", callback_data="ichancy_withdraw")
         )
-        text = "🎮 **I Chancy**\n\n✅ تم العثور على حسابك في الموقع\n\nاختر العملية المطلوبة:"
+        text = (
+            "🎮 **I Chancy**\n\n"
+            "✅ تم العثور على حسابك في الموقع\n\n"
+            "اختر العملية المطلوبة:"
+        )
     else:
         keyboard.add(
             InlineKeyboardButton("➕ إنشاء حساب iChancy", callback_data="ichancy_create")
         )
-        text = "🎮 **I Chancy**\n\n❌ لا يوجد لديك حساب في الموقع\n\nاضغط على إنشاء حساب للمتابعة:"
-    keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="back_main"))
-    bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=keyboard, parse_mode="Markdown")
-    bot.answer_callback_query(call.id)
+        text = (
+            "🎮 **I Chancy**\n\n"
+            "❌ لا يوجد لديك حساب في الموقع\n\n"
+            "اضغط على إنشاء حساب للمتابعة:"
+        )
 
+    keyboard.add(
+        InlineKeyboardButton("🔙 رجوع", callback_data="back_main")
+    )
+
+    bot.edit_message_text(
+        text=text,
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+    bot.answer_callback_query(call.id)
+    
+# =========================
+# الرجوع للقائمة الرئيسية
+# =========================
 @bot.callback_query_handler(func=lambda c: c.data == "back_main")
 def handle_back_main(call):
-    bot.edit_message_text("🏠 **القائمة الرئيسية**", call.message.chat.id, call.message.message_id, reply_markup=build_main_menu(), parse_mode="Markdown")
+    bot.edit_message_text(
+        "🏠 **القائمة الرئيسية**",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=build_main_menu(),
+        parse_mode="Markdown"
+    )
     bot.answer_callback_query(call.id)
 
-# =========================
-# إنشاء حساب iChancy
-# =========================
 @bot.callback_query_handler(func=lambda c: c.data == "ichancy_create")
 def handle_ichancy_create(call):
     ichancy_create.start_create_account(bot, call)
