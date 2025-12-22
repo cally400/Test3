@@ -4,45 +4,49 @@ import string
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import Tuple, Dict, Optional, Union
-import json
+from typing import Tuple, Dict, Optional, Union, List
 from functools import wraps
+
 
 class IChancyAPI:
     def __init__(self):
         self._setup_logging()
         self._load_config()
+
+        # Lazy initialization
         self.scraper = None
-        self.is_logged_in = False
-        self.session_cookies = {}  # تخزين الكوكيز في الذاكرة
-        self.session_expiry = None  # وقت انتهاء الجلسة
-        self.last_login_time = None  # وقت آخر تسجيل دخول
-        
+
+        # Session state
+        self.is_logged_in: bool = False
+        self.session_cookies: Dict = {}
+        self.session_expiry: Optional[datetime] = None
+        self.last_login_time: Optional[datetime] = None
+
+    # =========================
+    # إعدادات عامة
+    # =========================
     def _setup_logging(self):
-        """تهيئة نظام التسجيل - بدون ملفات"""
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.StreamHandler()  # فقط للشاشة
-            ]
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            handlers=[logging.StreamHandler()],
         )
         self.logger = logging.getLogger(__name__)
 
     def _load_config(self):
-        """تحميل الإعدادات"""
         self.USERNAME = os.getenv("AGENT_USERNAME", "twd_bot@agent.nsp")
         self.PASSWORD = os.getenv("AGENT_PASSWORD", "Twd@@123")
         self.PARENT_ID = os.getenv("PARENT_ID", "2470819")
 
-        self.ORIGIN = "https://agents.ichancy.com"
+        self.ORIGIN = os.getenv("ICHANCY_ORIGIN", "https://agents.ichancy.com")
+
         self.ENDPOINTS = {
-            'signin': "/global/api/User/signIn",
-            'create': "/global/api/Player/registerPlayer",
-            'statistics': "/global/api/Statistics/getPlayersStatisticsPro",
-            'deposit': "/global/api/Player/depositToPlayer",
-            'withdraw': "/global/api/Player/withdrawFromPlayer",
-            'balance': "/global/api/Player/getPlayerBalanceById"
+            "signin": "/global/api/User/signIn",
+            "create": "/global/api/Player/registerPlayer",
+            "statistics": "/global/api/Statistics/getPlayersStatisticsPro",
+            "deposit": "/global/api/Player/depositToPlayer",
+            "withdraw": "/global/api/Player/withdrawFromPlayer",
+            "balance": "/global/api/Player/getPlayerBalanceById",
         }
 
         self.USER_AGENT = (
@@ -52,17 +56,17 @@ class IChancyAPI:
         )
         self.REFERER = self.ORIGIN + "/dashboard"
 
+        self.REQUEST_TIMEOUT = 25
+
     def _init_scraper(self):
-        """تهيئة السكرابر مع استعادة الجلسة من الذاكرة"""
         self.scraper = cloudscraper.create_scraper(
             browser={
-                'browser': 'chrome',
-                'platform': 'windows',
-                'mobile': False
+                "browser": "chrome",
+                "platform": "windows",
+                "mobile": False,
             }
         )
-        
-        # استعادة الكوكيز من الذاكرة إذا كانت الجلسة سارية
+
         if self.session_cookies and self._is_session_valid():
             self.scraper.cookies.update(self.session_cookies)
             self.is_logged_in = True
@@ -70,132 +74,145 @@ class IChancyAPI:
         else:
             self.is_logged_in = False
             self.session_cookies = {}
+            self.session_expiry = None
+            self.last_login_time = None
+            self.logger.info("🔄 بدء جلسة جديدة")
 
-    def _is_session_valid(self):
-        """التحقق من صلاحية الجلسة"""
+    def _is_session_valid(self) -> bool:
         if not self.session_expiry or not self.last_login_time:
             return False
-            
-        # الجلسة صالحة لمدة 30 دقيقة
-        session_duration = timedelta(minutes=30)
-        max_session_age = timedelta(hours=2)
-        
-        time_since_login = datetime.now() - self.last_login_time
-        
-        return (datetime.now() < self.session_expiry and 
-                time_since_login < max_session_age)
 
-    def _get_headers(self):
-        """الحصول على هيدرات الطلب"""
+        now = datetime.now()
+        if now >= self.session_expiry:
+            return False
+
+        if now - self.last_login_time >= timedelta(hours=2):
+            return False
+
+        return True
+
+    def _get_headers(self) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
             "User-Agent": self.USER_AGENT,
             "Origin": self.ORIGIN,
-            "Referer": self.REFERER
+            "Referer": self.REFERER,
         }
 
-    def _log_captcha_success(self):
-        """تسجيل نجاح تخطي الكابتشا - في الذاكرة فقط"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        message = f"{timestamp} - تم تخطي الكابتشا بنجاح"
-        self.logger.info(message)
+    def _check_captcha(self, response) -> bool:
+        try:
+            text = response.text.lower()
+        except:
+            return False
 
-    def _check_captcha(self, response):
-        """التحقق من وجود كابتشا"""
-        if 'captcha' in response.text.lower() or 'cloudflare' in response.text.lower():
-            self.logger.warning("تم اكتشاف كابتشا في الاستجابة")
+        if "captcha" in text or "cloudflare" in text:
+            self.logger.warning("⚠️ تم اكتشاف كابتشا")
             return True
         return False
 
+    def _invalidate_session(self):
+        self.is_logged_in = False
+        self.session_cookies = {}
+        self.session_expiry = None
+        self.last_login_time = None
+
+    # =========================
+    # ديكوريتور إعادة المحاولة
+    # =========================
+    @staticmethod
     def with_retry(func):
-        """مُعدِّل لإعادة المحاولة"""
         @wraps(func)
-        def wrapper(self, *args, **kwargs):
+        def wrapper(self: "IChancyAPI", *args, **kwargs):
             try:
                 self.ensure_login()
-                result = func(self, *args, **kwargs)
+                resp = func(self, *args, **kwargs)
 
-                if result is None:
-                    return None
-
-                if isinstance(result, tuple) and len(result) >= 2:
-                    status, data = result[0], result[1]
-
-                    if status == 403 or (isinstance(data, dict) and 'captcha' in str(data).lower()):
-                        self.logger.warning("تم اكتشاف كابتشا، جاري إعادة المحاولة...")
-                        self.is_logged_in = False
-                        self.session_cookies = {}
+                if isinstance(resp, tuple) and isinstance(resp[0], int):
+                    if resp[0] in (401, 403):
+                        self.logger.warning("⚠️ جلسة غير صالحة — إعادة تسجيل الدخول")
+                        self._invalidate_session()
                         self.ensure_login()
-                        result = func(self, *args, **kwargs)
+                        resp = func(self, *args, **kwargs)
 
-                return result
+                return resp
             except Exception as e:
-                self.logger.error(f"خطأ في تنفيذ الدالة {func.__name__}: {str(e)}")
-                return None, {"error": str(e)}
+                self.logger.error(f"❌ خطأ في {func.__name__}: {e}")
+                return 500, {"error": str(e)}
+
         return wrapper
 
-    def login(self):
-        """تسجيل دخول الوكيل مع حفظ الجلسة في الذاكرة"""
-        if not self.scraper:
+    # =========================
+    # تسجيل الدخول
+    # =========================
+    def login(self) -> Tuple[bool, Dict]:
+        if self.scraper is None:
             self._init_scraper()
-            
-        payload = {
-            "username": self.USERNAME,
-            "password": self.PASSWORD
-        }
+
+        payload = {"username": self.USERNAME, "password": self.PASSWORD}
 
         try:
             resp = self.scraper.post(
-                self.ORIGIN + self.ENDPOINTS['signin'],
+                self.ORIGIN + self.ENDPOINTS["signin"],
                 json=payload,
-                headers=self._get_headers()
+                headers=self._get_headers(),
+                timeout=self.REQUEST_TIMEOUT,
             )
 
-            if not self._check_captcha(resp):
-                self._log_captcha_success()
+            if resp.status_code != 200:
+                return False, {"error": f"HTTP {resp.status_code}"}
 
-            data = resp.json()
+            if self._check_captcha(resp):
+                return False, {"error": "captcha_detected"}
+
+            try:
+                data = resp.json()
+            except:
+                return False, {"error": "invalid_json"}
 
             if data.get("result", False):
-                # حفظ الجلسة في الذاكرة
                 self.session_cookies = dict(self.scraper.cookies)
                 self.session_expiry = datetime.now() + timedelta(minutes=30)
                 self.last_login_time = datetime.now()
                 self.is_logged_in = True
-                
-                self.logger.info("✅ تم تسجيل الدخول وحفظ الجلسة في الذاكرة")
-                self.logger.info(f"   الجلسة صالحة حتى: {self.session_expiry.strftime('%H:%M:%S')}")
+
+                # حفظ الجلسة
+                try:
+                    from session_manager import save_session
+                    save_session()
+                except:
+                    pass
+
                 return True, data
-            else:
-                error_msg = data.get("notification", [{}])[0].get("content", "فشل تسجيل الدخول")
-                self.logger.error(f"❌ فشل تسجيل الدخول: {error_msg}")
-                return False, data
+
+            return False, {"error": "login_failed"}
 
         except Exception as e:
-            self.logger.error(f"❌ حدث خطأ في تسجيل الدخول: {str(e)}")
             return False, {"error": str(e)}
 
-    def ensure_login(self):
-        """التأكد من تسجيل الدخول مع إعادة الاتصال إذا لزم"""
-        if not self.scraper:
+    def ensure_login(self) -> bool:
+        if self.scraper is None:
             self._init_scraper()
-            
-        if self._is_session_valid() and self.is_logged_in:
-            self.logger.debug("✅ الجلسة سارية بالفعل")
+
+        if self.is_logged_in and self._is_session_valid():
             return True
-            
-        self.logger.info("🔄 الجلسة منتهية أو غير موجودة، جاري تسجيل الدخول...")
+
         success, data = self.login()
-        
         if not success:
-            error_msg = data.get("error", data.get("notification", [{}])[0].get("content", "فشل تسجيل الدخول"))
-            raise Exception(f"❌ فشل في تسجيل الدخول: {error_msg}")
-            
+            raise Exception(data.get("error", "login_failed"))
+
         return True
 
+    # =========================
+    # إنشاء لاعب عشوائي
+    # =========================
     @with_retry
-    def create_player(self, login=None, password=None) -> Tuple[int, dict, str, str, Optional[str]]:
-        """إنشاء لاعب جديد"""
+    def create_player(
+        self, login: Optional[str] = None, password: Optional[str] = None
+    ) -> Tuple[int, Dict, str, str, Optional[str]]:
+
+        if self.scraper is None:
+            self._init_scraper()
+
         login = login or "u" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))
         password = password or "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
         email = f"{login}@example.com"
@@ -205,54 +222,68 @@ class IChancyAPI:
                 "email": email,
                 "password": password,
                 "parentId": self.PARENT_ID,
-                "login": login
+                "login": login,
             }
         }
 
         resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS['create'],
+            self.ORIGIN + self.ENDPOINTS["create"],
             json=payload,
-            headers=self._get_headers()
+            headers=self._get_headers(),
+            timeout=self.REQUEST_TIMEOUT,
         )
 
         try:
             data = resp.json()
-            player_id = self.get_player_id(login)
-            return resp.status_code, data, login, password, player_id
-        except Exception:
-            return resp.status_code, {}, login, password, None
+        except:
+            data = {}
 
+        player_id = self.get_player_id(login)
+
+        return resp.status_code, data, login, password, player_id
+
+    # =========================
+    # player_id
+    # =========================
     @with_retry
     def get_player_id(self, login: str) -> Optional[str]:
-        """الحصول على معرف اللاعب"""
-        payload = {
-            "page": 1,
-            "pageSize": 100,
-            "filter": {"login": login}
-        }
+        if self.scraper is None:
+            self._init_scraper()
+
+        payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
 
         resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS['statistics'],
+            self.ORIGIN + self.ENDPOINTS["statistics"],
             json=payload,
-            headers=self._get_headers()
+            headers=self._get_headers(),
+            timeout=self.REQUEST_TIMEOUT,
         )
 
         try:
             data = resp.json()
-            records = data.get("result", {}).get("records", [])
-            for record in records:
-                if record.get("username") == login:
-                    return record.get("playerId")
-        except Exception:
-            pass
+        except:
+            return None
+
+        for record in data.get("result", {}).get("records", []):
+            if record.get("username") == login:
+                return record.get("playerId")
+
         return None
 
+    # =========================
+    # إنشاء لاعب ببيانات محددة
+    # =========================
     @with_retry
-    def create_player_with_credentials(self, login: str, password: str) -> Tuple[int, dict, Optional[str], str]:
-        """إنشاء لاعب ببيانات محددة"""
+    def create_player_with_credentials(
+        self, login: str, password: str
+    ) -> Tuple[int, Dict, Optional[str], str]:
+
+        if self.scraper is None:
+            self._init_scraper()
+
         email = f"{login}@agint.nsp"
-        # التأكد من تفرد الإيميل
         suffix = 1
+
         while self.check_email_exists(email):
             email = f"{login}_{suffix}@agint.nsp"
             suffix += 1
@@ -262,151 +293,189 @@ class IChancyAPI:
                 "email": email,
                 "password": password,
                 "parentId": self.PARENT_ID,
-                "login": login
+                "login": login,
             }
         }
 
         resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS['create'],
+            self.ORIGIN + self.ENDPOINTS["create"],
             json=payload,
-            headers=self._get_headers()
+            headers=self._get_headers(),
+            timeout=self.REQUEST_TIMEOUT,
         )
 
         try:
             data = resp.json()
-            player_id = self.get_player_id(login)
-            return resp.status_code, data, player_id, email
-        except Exception:
-            return resp.status_code, {}, None, email
+        except:
+            data = {}
 
+        player_id = self.get_player_id(login)
+
+        return resp.status_code, data, player_id, email
+
+    # =========================
+    # التحقق من الإيميل
+    # =========================
     @with_retry
     def check_email_exists(self, email: str) -> bool:
-        """التحقق من وجود إيميل"""
-        payload = {
-            "page": 1,
-            "pageSize": 100,
-            "filter": {"email": email}
-        }
+        if self.scraper is None:
+            self._init_scraper()
+
+        payload = {"page": 1, "pageSize": 100, "filter": {"email": email}}
 
         resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS['statistics'],
+            self.ORIGIN + self.ENDPOINTS["statistics"],
             json=payload,
-            headers=self._get_headers()
+            headers=self._get_headers(),
+            timeout=self.REQUEST_TIMEOUT,
         )
 
         try:
             data = resp.json()
-            records = data.get("result", {}).get("records", [])
-            return any(record.get("email") == email for record in records)
-        except Exception:
+        except:
             return False
 
+        return any(record.get("email") == email for record in data.get("result", {}).get("records", []))
+
+    # =========================
+    # التحقق من اللاعب
+    # =========================
     @with_retry
     def check_player_exists(self, login: str) -> bool:
-        """التحقق من وجود لاعب"""
-        payload = {
-            "page": 1,
-            "pageSize": 100,
-            "filter": {"login": login}
-        }
+        if self.scraper is None:
+            self._init_scraper()
+
+        payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
 
         resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS['statistics'],
+            self.ORIGIN + self.ENDPOINTS["statistics"],
             json=payload,
-            headers=self._get_headers()
+            headers=self._get_headers(),
+            timeout=self.REQUEST_TIMEOUT,
         )
 
         try:
             data = resp.json()
-            records = data.get("result", {}).get("records", [])
-            return any(record.get("username") == login for record in records)
-        except Exception:
+        except:
             return False
 
+        return any(record.get("username") == login for record in data.get("result", {}).get("records", []))
+
+    # =========================
+    # إيداع
+    # =========================
     @with_retry
-    def deposit_to_player(self, player_id: str, amount: float) -> Tuple[int, dict]:
-        """إيداع رصيد للاعب"""
+    def deposit_to_player(self, player_id: str, amount: float) -> Tuple[int, Dict]:
+        if self.scraper is None:
+            self._init_scraper()
+
         payload = {
             "amount": amount,
             "comment": "Deposit from API",
             "playerId": player_id,
             "currencyCode": "NSP",
             "currency": "NSP",
-            "moneyStatus": 5
+            "moneyStatus": 5,
         }
 
         resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS['deposit'],
+            self.ORIGIN + self.ENDPOINTS["deposit"],
             json=payload,
-            headers=self._get_headers()
+            headers=self._get_headers(),
+            timeout=self.REQUEST_TIMEOUT,
         )
 
         try:
             data = resp.json()
-            return resp.status_code, data
-        except Exception:
-            return resp.status_code, {}
+        except:
+            data = {}
 
+        return resp.status_code, data
+
+    # =========================
+    # سحب
+    # =========================
     @with_retry
-    def withdraw_from_player(self, player_id: str, amount: float) -> Tuple[int, dict]:
-        """سحب رصيد من اللاعب"""
+    def withdraw_from_player(self, player_id: str, amount: float) -> Tuple[int, Dict]:
+        if self.scraper is None:
+            self._init_scraper()
+
         payload = {
             "amount": amount,
             "comment": "Withdrawal from API",
             "playerId": player_id,
             "currencyCode": "NSP",
             "currency": "NSP",
-            "moneyStatus": 5
+            "moneyStatus": 5,
         }
 
         resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS['withdraw'],
+            self.ORIGIN + self.ENDPOINTS["withdraw"],
             json=payload,
-            headers=self._get_headers()
+            headers=self._get_headers(),
+            timeout=self.REQUEST_TIMEOUT,
         )
 
         try:
             data = resp.json()
-            return resp.status_code, data
-        except Exception:
-            return resp.status_code, {}
+        except:
+            data = {}
 
+        return resp.status_code, data
+
+    # =========================
+    # رصيد اللاعب
+    # =========================
     @with_retry
-    def get_player_balance(self, player_id: str) -> Tuple[int, dict, float]:
-        """الحصول على رصيد اللاعب"""
+    def get_player_balance(self, player_id: str) -> Tuple[int, Dict, float]:
+        if self.scraper is None:
+            self._init_scraper()
+
         payload = {"playerId": str(player_id)}
 
         resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS['balance'],
+            self.ORIGIN + self.ENDPOINTS["balance"],
             json=payload,
-            headers=self._get_headers()
+            headers=self._get_headers(),
+            timeout=self.REQUEST_TIMEOUT,
         )
 
         try:
             data = resp.json()
-            results = data.get("result", [])
-            balance = results[0].get("balance", 0) if isinstance(results, list) and results else 0
-            return resp.status_code, data, balance
-        except Exception:
-            return resp.status_code, {}, 0
+        except:
+            return resp.status_code, {}, 0.0
 
+        results = data.get("result", [])
+        balance = 0.0
+
+        if isinstance(results, list) and results:
+            try:
+                balance = float(results[0].get("balance", 0))
+            except:
+                balance = 0.0
+
+        return resp.status_code, data, balance
+
+    # =========================
+    # جميع اللاعبين
+    # =========================
     @with_retry
     def get_all_players(self) -> list:
-        """الحصول على جميع اللاعبين"""
-        payload = {
-            "page": 1,
-            "pageSize": 100,
-            "filter": {}
-        }
+        if self.scraper is None:
+            self._init_scraper()
+
+        payload = {"page": 1, "pageSize": 100, "filter": {}}
 
         resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS['statistics'],
+            self.ORIGIN + self.ENDPOINTS["statistics"],
             json=payload,
-            headers=self._get_headers()
+            headers=self._get_headers(),
+            timeout=self.REQUEST_TIMEOUT,
         )
 
         try:
             data = resp.json()
-            return data.get("result", {}).get("records", [])
-        except Exception:
+        except:
             return []
+
+        return data.get("result", {}).get("records", [])
