@@ -2,235 +2,126 @@ import os
 import random
 import string
 import db
-import time
-from datetime import datetime
 from ichancy_api import IChancyAPI
 
-# إنشاء مثول API واحد فقط (Singleton)
-api_instance = None
-
-def get_api():
-    """الحصول على مثول واحد من API"""
-    global api_instance
-    if api_instance is None:
-        api_instance = IChancyAPI()
-    return api_instance
+api = IChancyAPI()
 
 def _random_suffix(length=3):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 def generate_username(raw_username: str) -> str:
     """إنشاء اسم مستخدم فريد"""
-    api = get_api()
-    
-    # تنظيف الاسم
-    clean_name = ''.join(c for c in raw_username if c.isalnum() or c in ['_', '-'])
-    if not clean_name or len(clean_name) < 2:
-        clean_name = "user"
-    
-    base = clean_name.lower()
-    
-    for i in range(8):
-        if i == 0:
-            username = base
-        elif i < 5:
-            username = f"{base}_{_random_suffix(3)}"
-        else:
-            username = f"{base}_{i:02d}"
+    base = f"ZEUS_{raw_username}"
+    for i in range(6):
+        username = base if i == 0 else f"{base}_{_random_suffix()}"
         
-        try:
-            if not api.check_player_exists(username):
-                return username
-            time.sleep(0.1)  # تأخير بسيط بين المحاولات
-        except Exception:
-            continue
-    
-    # اسم عشوائي إذا فشلت جميع المحاولات
-    return f"user_{int(time.time())}_{_random_suffix(4)}"
+        status, exists = api.check_player_exists(username)
+        
+        # إذا API رجع 403 → الكوكيز منتهية
+        if status in (401, 403):
+            raise ValueError("⚠️ الجلسة منتهية — انتظر دقيقة ليتم تجديد الكوكيز تلقائيًا")
+
+        if not exists:
+            return username
+
+    raise ValueError("❌ اسم المستخدم غير متاح، جرّب اسمًا آخر")
 
 def start_create_account(bot, call):
-    """بدء إنشاء حساب مع تجديد الجلسة"""
-    chat_id = call.message.chat.id
-    api = get_api()
-    
-    try:
-        # إرسال رسالة تحميل
-        msg = bot.send_message(chat_id, "🔄 **جاري الاتصال بالنظام...**", parse_mode="Markdown")
-        
-        try:
-            # محاولة تسجيل الدخول
-            success = api.ensure_login()
-            
-            if success:
-                bot.edit_message_text(
-                    "✅ **تم الاتصال بنجاح!**\n\n"
-                    "📝 **أرسل اسم المستخدم المطلوب:**\n"
-                    "(بالإنجليزية، بدون مسافات، 3 أحرف على الأقل)",
-                    chat_id=chat_id,
-                    message_id=msg.message_id,
-                    parse_mode="Markdown"
-                )
-                
-                bot.register_next_step_handler_by_chat_id(
-                    chat_id, 
-                    lambda message: process_username_step(bot, message, call.from_user.id, msg.message_id)
-                )
-            else:
-                bot.edit_message_text(
-                    "❌ **فشل الاتصال بالنظام**\n\n"
-                    "يرجى المحاولة مرة أخرى بعد قليل.",
-                    chat_id=chat_id,
-                    message_id=msg.message_id,
-                    parse_mode="Markdown"
-                )
-                
-        except Exception as login_error:
-            error_msg = str(login_error)
-            
-            # معالجة خاصة لـ Duplicate login
-            if "duplicate" in error_msg.lower() or "already" in error_msg.lower():
-                bot.edit_message_text(
-                    "⚠️ **الجلسة نشطة بالفعل**\n\n"
-                    "📝 **أرسل اسم المستخدم المطلوب:**\n"
-                    "(بالإنجليزية، بدون مسافات، 3 أحرف على الأقل)",
-                    chat_id=chat_id,
-                    message_id=msg.message_id,
-                    parse_mode="Markdown"
-                )
-                
-                bot.register_next_step_handler_by_chat_id(
-                    chat_id, 
-                    lambda message: process_username_step(bot, message, call.from_user.id, msg.message_id)
-                )
-            else:
-                bot.edit_message_text(
-                    f"❌ **خطأ في الاتصال:**\n\n{error_msg[:100]}",
-                    chat_id=chat_id,
-                    message_id=msg.message_id,
-                    parse_mode="Markdown"
-                )
-                
-    except Exception as e:
-        bot.send_message(
-            chat_id,
-            f"❌ **حدث خطأ غير متوقع:**\n\n{str(e)[:100]}"
-        )
+    bot.send_message(call.message.chat.id, "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):")
+    bot.register_next_step_handler_by_chat_id(
+        call.message.chat.id, 
+        lambda msg: process_username_step(bot, msg, call.from_user.id)
+    )
 
-def process_username_step(bot, message, telegram_id, prev_msg_id):
-    """معالجة اسم المستخدم"""
+def process_username_step(bot, message, telegram_id):
     raw_username = message.text.strip()
+    raw_username = ''.join(c for c in raw_username if c.isalnum() or c in ['_', '-'])
     
-    if len(raw_username) < 2:
-        bot.send_message(message.chat.id, "❌ الاسم قصير جداً، يجب أن يكون حرفين على الأقل")
+    if len(raw_username) < 3:
+        bot.send_message(message.chat.id, "❌ الاسم قصير جداً، يجب أن يكون 3 أحرف على الأقل")
         return
     
     try:
         username = generate_username(raw_username)
-        
-        bot.edit_message_text(
-            f"✅ **الاسم المتاح:** `{username}`\n\n"
-            "🔐 **أرسل كلمة المرور الآن:**\n"
-            "- 8 أحرف على الأقل\n"
-            "- أحرف كبيرة وصغيرة\n"
-            "- أرقام\n"
-            "- مثال: `MyPass123`",
-            chat_id=message.chat.id,
-            message_id=prev_msg_id,
+        bot.send_message(
+            message.chat.id, 
+            f"✅ الاسم متاح: `{username}`\n\n"
+            f"🔐 **الآن أرسل كلمة السر:**\n"
+            f"- يجب أن تحتوي على أحرف كبيرة وصغيرة\n"
+            f"- يجب أن تحتوي على أرقام\n"
+            f"- يجب أن تكون 8 أحرف على الأقل\n\n"
+            f"مثال: `Pass1234`",
             parse_mode="Markdown"
         )
-        
         bot.register_next_step_handler_by_chat_id(
             message.chat.id, 
-            lambda msg: process_password_step(bot, msg, telegram_id, username, prev_msg_id)
+            lambda msg: process_password_step(bot, msg, telegram_id, username)
         )
-        
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+        bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}\n\nيرجى المحاولة مرة أخرى باستخدام /start")
 
-def process_password_step(bot, message, telegram_id, username, prev_msg_id):
-    """معالجة كلمة المرور وإنشاء الحساب"""
+def process_password_step(bot, message, telegram_id, username):
     password = message.text.strip()
-    api = get_api()
     
-    # التحقق الأساسي
-    if len(password) < 6:
-        bot.send_message(message.chat.id, "❌ كلمة المرور قصيرة جداً")
+    if len(password) < 8:
+        bot.send_message(message.chat.id, "❌ كلمة المرور قصيرة جداً، يجب أن تكون 8 أحرف على الأقل")
         return
     
-    bot.edit_message_text(
-        "🔄 **جاري إنشاء الحساب...**",
-        chat_id=message.chat.id,
-        message_id=prev_msg_id,
-        parse_mode="Markdown"
-    )
+    if not any(c.isupper() for c in password) or not any(c.islower() for c in password):
+        bot.send_message(message.chat.id, "❌ يجب أن تحتوي كلمة المرور على أحرف كبيرة وصغيرة")
+        return
+    
+    if not any(c.isdigit() for c in password):
+        bot.send_message(message.chat.id, "❌ يجب أن تحتوي كلمة المرور على أرقام")
+        return
     
     try:
-        # التأكد من الجلسة
-        api.ensure_login()
+        email = f"{username.lower()}@player.ichancy.com"
         
-        # إنشاء الحساب
-        status, data, player_id, email = api.create_player_with_credentials(username, password)
-        
-        if status != 200:
-            error_msg = "خطأ في الشبكة"
-            if isinstance(data, dict):
-                if 'notification' in data and data['notification']:
-                    error_msg = data['notification'][0].get('content', error_msg)
-                elif 'error' in data:
-                    error_msg = data['error']
-            
-            bot.edit_message_text(
-                f"❌ **{error_msg}**",
-                chat_id=message.chat.id,
-                message_id=prev_msg_id,
-                parse_mode="Markdown"
-            )
+        status, exists = api.check_player_exists(username)
+        if status in (401, 403):
+            bot.send_message(message.chat.id, "⚠️ الجلسة منتهية — انتظر دقيقة ليتم تجديد الكوكيز تلقائيًا")
             return
         
-        # إذا لم نحصل على player_id، نحاول مرة أخرى
+        if exists:
+            bot.send_message(message.chat.id, "❌ هذا الاسم مستخدم بالفعل، يرجى اختيار اسم آخر")
+            return
+        
+        status, data, player_id, email_created = api.create_player_with_credentials(username, password)
+        
+        if status != 200:
+            error_msg = "فشل إنشاء الحساب"
+            if isinstance(data, dict):
+                notifications = data.get("notification", [])
+                if notifications:
+                    error_msg = notifications[0].get("content", error_msg)
+            raise ValueError(error_msg)
+        
         if not player_id:
-            time.sleep(1)
-            player_id = api.get_player_id(username)
+            raise ValueError("لم يتم إنشاء معرف اللاعب")
         
-        # حفظ في قاعدة البيانات
-        try:
-            db.update_player_info(
-                telegram_id, 
-                player_id or "N/A", 
-                username, 
-                email, 
-                password
-            )
-        except Exception as db_error:
-            print(f"ملاحظة: خطأ في قاعدة البيانات: {db_error}")
+        db.update_player_info(telegram_id, player_id, username, email_created or email, password)
         
-        # رسالة النجاح
-        success_msg = f"""
+        login_info = f"""
 ✅ **تم إنشاء الحساب بنجاح!**
 
-📋 **البيانات:**
-👤 **المستخدم:** `{username}`
+👤 **اسم المستخدم:** `{username}`
 🔐 **كلمة المرور:** `{password}`
-📧 **الإيميل:** `{email}`
-🆔 **المعرف:** `{player_id or 'N/A'}`
+📧 **البريد الإلكتروني:** `{email_created or email}`
+🆔 **معرف اللاعب:** `{player_id}`
 
-🌐 **الدخول:** https://www.ichancy.com/login
+🔗 **رابط تسجيل الدخول:**
+https://www.ichancy.com/login
 
-💾 **احفظ هذه البيانات في مكان آمن!**
+⚠️ **احفظ هذه البيانات في مكان آمن!**
         """
         
-        bot.edit_message_text(
-            success_msg,
-            chat_id=message.chat.id,
-            message_id=prev_msg_id,
-            parse_mode="Markdown"
-        )
+        bot.send_message(message.chat.id, login_info, parse_mode="Markdown")
         
     except Exception as e:
-        error_msg = str(e)
-        bot.edit_message_text(
-            f"❌ **خطأ:**\n\n{error_msg[:150]}",
-            chat_id=message.chat.id,
-            message_id=prev_msg_id,
+        bot.send_message(
+            message.chat.id, 
+            f"❌ **فشل إنشاء الحساب:**\n\n{str(e)}\n\n"
+            f"يرجى المحاولة لاحقاً.",
             parse_mode="Markdown"
         )
