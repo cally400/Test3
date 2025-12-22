@@ -1,9 +1,14 @@
 import db
 from ichancy_api import IChancyAPI
 
-api = IChancyAPI()
+# لا تنشئ API عند الاستيراد
+# api = IChancyAPI()  ← ❌ ممنوع
 
 pending_deposits = {}
+
+def get_api():
+    """إنشاء API فقط عند الحاجة"""
+    return IChancyAPI()
 
 def start_deposit(bot, call):
     user = db.get_user(call.from_user.id)
@@ -46,22 +51,35 @@ def process_amount(bot, message, telegram_id):
     db.update_user(telegram_id, {"balance": balance - amount})
 
     # شحن iChancy
+    api = get_api()  # ← إنشاء API هنا فقط
     try:
         status, data = api.deposit_to_player(player_id, amount)
     except Exception as e:
         status, data = 500, {"notification":[{"content": str(e)}]}
 
     if status == 200 and data.get("result", False):
-        db.log_transaction(telegram_id=telegram_id, player_id=player_id,
-                           amount=amount, ttype="ichancy_deposit", status="completed")
+        db.log_transaction(
+            telegram_id=telegram_id,
+            player_id=player_id,
+            amount=amount,
+            ttype="ichancy_deposit",
+            status="completed"
+        )
         bot.send_message(message.chat.id, f"✅ تم شحن {amount} بنجاح في حساب iChancy")
     else:
         # rollback
         db.update_user(telegram_id, {"balance": balance})
         error_msg = data.get("notification", [{}])[0].get("content", "فشل غير معروف")
-        db.log_transaction(telegram_id=telegram_id, player_id=player_id,
-                           amount=amount, ttype="ichancy_deposit", status="failed")
-        bot.send_message(message.chat.id, f"❌ فشل الشحن:\n{error_msg}\n\n🔄 تم إعادة الرصيد")
+        db.log_transaction(
+            telegram_id=telegram_id,
+            player_id=player_id,
+            amount=amount,
+            ttype="ichancy_deposit",
+            status="failed"
+        )
+        bot.send_message(
+            message.chat.id,
+            f"❌ فشل الشحن:\n{error_msg}\n\n🔄 تم إعادة الرصيد"
+        )
 
     pending_deposits.pop(telegram_id, None)
-
