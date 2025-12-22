@@ -12,7 +12,6 @@ class IChancyAPI:
         self._setup_logging()
         self._load_config()
 
-        # إنشاء سكرابر Cloudflare
         self.scraper = cloudscraper.create_scraper(
             browser={
                 'browser': 'chrome',
@@ -25,9 +24,6 @@ class IChancyAPI:
         self.session_expiry = None
         self.last_login_time = None
 
-    # -----------------------------
-    # إعدادات
-    # -----------------------------
     def _setup_logging(self):
         logging.basicConfig(
             level=logging.INFO,
@@ -58,9 +54,6 @@ class IChancyAPI:
         )
         self.REFERER = self.ORIGIN + "/dashboard"
 
-    # -----------------------------
-    # أدوات مساعدة
-    # -----------------------------
     def _headers(self):
         return {
             "Content-Type": "application/json",
@@ -81,9 +74,6 @@ class IChancyAPI:
 
         return True
 
-    # -----------------------------
-    # تسجيل الدخول
-    # -----------------------------
     def login(self):
         payload = {"username": self.USERNAME, "password": self.PASSWORD}
 
@@ -121,9 +111,6 @@ class IChancyAPI:
 
         return True
 
-    # -----------------------------
-    # Decorator لإعادة المحاولة
-    # -----------------------------
     def with_retry(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
@@ -133,7 +120,7 @@ class IChancyAPI:
             if result is None:
                 return 0, {}
 
-            status, data = result[0], result[1]
+            status = result[0]
 
             if status != 200:
                 self.is_logged_in = False
@@ -143,9 +130,6 @@ class IChancyAPI:
             return result
         return wrapper
 
-    # -----------------------------
-    # API Calls
-    # -----------------------------
     @with_retry
     def create_player(self):
         login = "u" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))
