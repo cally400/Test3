@@ -1,13 +1,10 @@
-import requests
+import cloudscraper
 import random
 import string
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import Tuple, Optional
-import json
 from functools import wraps
-from cookie_manager import load_cookies_into_session
 
 
 class IChancyAPI:
@@ -15,25 +12,21 @@ class IChancyAPI:
         self._setup_logging()
         self._load_config()
 
-        # جلسة Requests بدل cloudscraper
-        self.session = requests.Session()
+        # إنشاء سكرابر Cloudflare
+        self.scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'mobile': False
+            }
+        )
 
-        # تحميل الكوكيز التي يجددها Playwright
-        if load_cookies_into_session(self.session):
-            self.logger.info("تم تحميل الكوكيز — الجلسة جاهزة")
-        else:
-            self.logger.error("فشل تحميل الكوكيز — تأكد من وجود ichancy_cookies.json")
-
-        # إضافة الهيدرات
-        self.session.headers.update({
-            "Content-Type": "application/json",
-            "User-Agent": self.USER_AGENT,
-            "Origin": self.ORIGIN,
-            "Referer": self.REFERER
-        })
+        self.is_logged_in = False
+        self.session_expiry = None
+        self.last_login_time = None
 
     # -----------------------------
-    # الإعدادات
+    # إعدادات
     # -----------------------------
     def _setup_logging(self):
         logging.basicConfig(
@@ -68,219 +61,243 @@ class IChancyAPI:
     # -----------------------------
     # أدوات مساعدة
     # -----------------------------
-    def _post(self, endpoint, payload):
-        url = self.ORIGIN + endpoint
-        try:
-            resp = self.session.post(url, json=payload, timeout=30)
+    def _headers(self):
+        return {
+            "Content-Type": "application/json",
+            "User-Agent": self.USER_AGENT,
+            "Origin": self.ORIGIN,
+            "Referer": self.REFERER
+        }
 
-            if resp.status_code == 403:
-                self.logger.error("403 Forbidden — الكوكيز منتهية")
-                return 403, {"error": "forbidden"}
+    def _is_session_valid(self):
+        if not self.session_expiry or not self.last_login_time:
+            return False
 
-            if resp.status_code == 401:
-                self.logger.error("401 Unauthorized — الجلسة غير صالحة")
-                return 401, {"error": "unauthorized"}
+        if datetime.now() > self.session_expiry:
+            return False
 
-            try:
-                return resp.status_code, resp.json()
-            except:
-                return resp.status_code, {}
-        except Exception as e:
-            self.logger.error(f"POST Error: {e}")
-            return 500, {"error": str(e)}
+        if datetime.now() - self.last_login_time > timedelta(hours=2):
+            return False
+
+        return True
 
     # -----------------------------
-    # decorator ذكي
+    # تسجيل الدخول
+    # -----------------------------
+    def login(self):
+        payload = {"username": self.USERNAME, "password": self.PASSWORD}
+
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['signin'],
+            json=payload,
+            headers=self._headers()
+        )
+
+        try:
+            data = resp.json()
+        except:
+            return False, {}
+
+        if data.get("result", False):
+            self.is_logged_in = True
+            self.last_login_time = datetime.now()
+            self.session_expiry = datetime.now() + timedelta(minutes=30)
+
+            self.logger.info("✅ تسجيل الدخول ناجح — الجلسة جاهزة")
+            return True, data
+
+        return False, data
+
+    def ensure_login(self):
+        if self.is_logged_in and self._is_session_valid():
+            return True
+
+        self.logger.info("🔄 إعادة تسجيل الدخول...")
+        ok, data = self.login()
+
+        if not ok:
+            msg = data.get("notification", [{}])[0].get("content", "فشل تسجيل الدخول")
+            raise RuntimeError(msg)
+
+        return True
+
+    # -----------------------------
+    # Decorator لإعادة المحاولة
     # -----------------------------
     def with_retry(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
+            self.ensure_login()
             result = func(self, *args, **kwargs)
 
-            # لو الدالة رجعت tuple فيها status
-            if isinstance(result, tuple) and len(result) >= 2:
-                status = result[0]
-                if status in (401, 403):
-                    self.logger.warning("الجلسة منتهية — انتظر التجديد التلقائي")
-                    return result
+            if result is None:
+                return 0, {}
 
-            # لو رجعت bool أو أي شيء آخر → رجّعه كما هو
+            status, data = result[0], result[1]
+
+            if status != 200:
+                self.is_logged_in = False
+                self.ensure_login()
+                return func(self, *args, **kwargs)
+
             return result
-
         return wrapper
 
     # -----------------------------
-    # إنشاء لاعب جديد
+    # API Calls
     # -----------------------------
     @with_retry
-    def create_player(self, login=None, password=None):
-        login = login or "u" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))
-        password = password or "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
+    def create_player(self):
+        login = "u" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))
+        pwd = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
         email = f"{login}@example.com"
 
         payload = {
             "player": {
                 "email": email,
-                "password": password,
+                "password": pwd,
                 "parentId": self.PARENT_ID,
                 "login": login
             }
         }
 
-        status, data = self._post(self.ENDPOINTS['create'], payload)
-        player_id = self.get_player_id(login)
-
-        return status, data, login, password, player_id
-
-    # -----------------------------
-    # الحصول على playerId
-    # -----------------------------
-    @with_retry
-    def get_player_id(self, login: str) -> Optional[str]:
-        payload = {
-            "page": 1,
-            "pageSize": 100,
-            "filter": {"login": login}
-        }
-
-        status, data = self._post(self.ENDPOINTS['statistics'], payload)
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['create'],
+            json=payload,
+            headers=self._headers()
+        )
 
         try:
+            data = resp.json()
+        except:
+            return resp.status_code, {}, login, pwd, None
+
+        player_id = self.get_player_id(login)
+        return resp.status_code, data, login, pwd, player_id
+
+    @with_retry
+    def get_player_id(self, login):
+        payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
+
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=self._headers()
+        )
+
+        try:
+            data = resp.json()
             records = data.get("result", {}).get("records", [])
-            for record in records:
-                if record.get("username") == login:
-                    return record.get("playerId")
+            for r in records:
+                if r.get("username") == login:
+                    return r.get("playerId")
         except:
             pass
 
         return None
 
-    # -----------------------------
-    # إنشاء لاعب ببيانات محددة
-    # -----------------------------
     @with_retry
-    def create_player_with_credentials(self, login: str, password: str):
-        email = f"{login}@agint.nsp"
-        suffix = 1
-
-        while self.check_email_exists(email):
-            email = f"{login}_{suffix}@agint.nsp"
-            suffix += 1
+    def create_player_with_credentials(self, login, pwd):
+        email = f"{login}@agent.nsp"
 
         payload = {
             "player": {
                 "email": email,
-                "password": password,
+                "password": pwd,
                 "parentId": self.PARENT_ID,
                 "login": login
             }
         }
 
-        status, data = self._post(self.ENDPOINTS['create'], payload)
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['create'],
+            json=payload,
+            headers=self._headers()
+        )
+
+        try:
+            data = resp.json()
+        except:
+            return resp.status_code, {}, None, email
+
         player_id = self.get_player_id(login)
+        return resp.status_code, data, player_id, email
 
-        return status, data, player_id, email
-
-    # -----------------------------
-    # التحقق من وجود إيميل
-    # -----------------------------
     @with_retry
-    def check_email_exists(self, email: str) -> bool:
-        payload = {
-            "page": 1,
-            "pageSize": 100,
-            "filter": {"email": email}
-        }
+    def check_player_exists(self, login):
+        payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
 
-        status, data = self._post(self.ENDPOINTS['statistics'], payload)
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['statistics'],
+            json=payload,
+            headers=self._headers()
+        )
 
         try:
+            data = resp.json()
             records = data.get("result", {}).get("records", [])
-            return any(record.get("email") == email for record in records)
+            return any(r.get("username") == login for r in records)
         except:
             return False
 
-    # -----------------------------
-    # التحقق من وجود لاعب
-    # -----------------------------
     @with_retry
-    def check_player_exists(self, login: str) -> bool:
-        payload = {
-            "page": 1,
-            "pageSize": 100,
-            "filter": {"login": login}
-        }
-
-        status, data = self._post(self.ENDPOINTS['statistics'], payload)
-
-        try:
-            records = data.get("result", {}).get("records", [])
-            return any(record.get("username") == login for record in records)
-        except:
-            return False
-
-    # -----------------------------
-    # إيداع
-    # -----------------------------
-    @with_retry
-    def deposit_to_player(self, player_id: str, amount: float):
+    def deposit_to_player(self, player_id, amount):
         payload = {
             "amount": amount,
-            "comment": "Deposit from API",
+            "comment": None,
             "playerId": player_id,
             "currencyCode": "NSP",
             "currency": "NSP",
             "moneyStatus": 5
         }
 
-        return self._post(self.ENDPOINTS['deposit'], payload)
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['deposit'],
+            json=payload,
+            headers=self._headers()
+        )
 
-    # -----------------------------
-    # سحب
-    # -----------------------------
+        try:
+            return resp.status_code, resp.json()
+        except:
+            return resp.status_code, {}
+
     @with_retry
-    def withdraw_from_player(self, player_id: str, amount: float):
+    def withdraw_from_player(self, player_id, amount):
         payload = {
             "amount": amount,
-            "comment": "Withdrawal from API",
+            "comment": None,
             "playerId": player_id,
             "currencyCode": "NSP",
             "currency": "NSP",
             "moneyStatus": 5
         }
 
-        return self._post(self.ENDPOINTS['withdraw'], payload)
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['withdraw'],
+            json=payload,
+            headers=self._headers()
+        )
 
-    # -----------------------------
-    # رصيد اللاعب
-    # -----------------------------
+        try:
+            return resp.status_code, resp.json()
+        except:
+            return resp.status_code, {}
+
     @with_retry
-    def get_player_balance(self, player_id: str):
+    def get_player_balance(self, player_id):
         payload = {"playerId": str(player_id)}
 
-        status, data = self._post(self.ENDPOINTS['balance'], payload)
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS['balance'],
+            json=payload,
+            headers=self._headers()
+        )
 
         try:
+            data = resp.json()
             results = data.get("result", [])
             balance = results[0].get("balance", 0) if results else 0
-            return status, data, balance
+            return resp.status_code, data, balance
         except:
-            return status, data, 0
-
-    # -----------------------------
-    # جميع اللاعبين
-    # -----------------------------
-    @with_retry
-    def get_all_players(self):
-        payload = {
-            "page": 1,
-            "pageSize": 100,
-            "filter": {}
-        }
-
-        status, data = self._post(self.ENDPOINTS['statistics'], payload)
-
-        try:
-            return data.get("result", {}).get("records", [])
-        except:
-            return []
+            return resp.status_code, {}, 0
