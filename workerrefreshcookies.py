@@ -2,7 +2,6 @@ import asyncio
 from playwright.async_api import async_playwright
 import json
 import os
-import time
 
 USERNAME = os.getenv("AGENT_USERNAME")
 PASSWORD = os.getenv("AGENT_PASSWORD")
@@ -39,11 +38,19 @@ async def refresh_cookies():
         print("🔐 تسجيل الدخول...")
         await page.click('button[type="submit"]')
 
-        # الانتظار حتى يتم تجاوز Cloudflare
-        await page.wait_for_load_state("networkidle")
-
+        # انتظار تجاوز Cloudflare + إعادة التوجيه
         print("⏳ انتظار اكتمال التحقق من Cloudflare...")
+        await page.wait_for_load_state("networkidle")
         await asyncio.sleep(5)
+
+        # 🔥 أهم خطوة: انتظار ظهور لوحة التحكم
+        try:
+            await page.wait_for_selector("div.dashboard", timeout=20000)
+            print("🎉 تم تسجيل الدخول بنجاح!")
+        except:
+            print("❌ فشل تسجيل الدخول — لم تظهر لوحة التحكم")
+            await browser.close()
+            return
 
         # استخراج الكوكيز
         cookies = await context.cookies()
