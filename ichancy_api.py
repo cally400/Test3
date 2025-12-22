@@ -4,7 +4,7 @@ import string
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import Tuple, Dict, Optional, Union, List
+from typing import Tuple, Dict, Optional, List
 from functools import wraps
 
 
@@ -102,11 +102,11 @@ class IChancyAPI:
     def _check_captcha(self, response) -> bool:
         try:
             text = response.text.lower()
-        except:
+        except Exception:
             return False
 
         if "captcha" in text or "cloudflare" in text:
-            self.logger.warning("⚠️ تم اكتشاف كابتشا")
+            self.logger.warning("⚠️ تم اكتشاف كابتشا/Cloudflare")
             return True
         return False
 
@@ -159,6 +159,7 @@ class IChancyAPI:
             )
 
             if resp.status_code != 200:
+                self.logger.error(f"❌ فشل تسجيل الدخول HTTP {resp.status_code}")
                 return False, {"error": f"HTTP {resp.status_code}"}
 
             if self._check_captcha(resp):
@@ -166,7 +167,8 @@ class IChancyAPI:
 
             try:
                 data = resp.json()
-            except:
+            except Exception:
+                self.logger.error("❌ JSON غير صالح في تسجيل الدخول")
                 return False, {"error": "invalid_json"}
 
             if data.get("result", False):
@@ -175,18 +177,17 @@ class IChancyAPI:
                 self.last_login_time = datetime.now()
                 self.is_logged_in = True
 
-                # حفظ الجلسة
-                try:
-                    from session_manager import save_session
-                    save_session()
-                except:
-                    pass
-
+                self.logger.info("✅ تم تسجيل الدخول بنجاح")
                 return True, data
 
-            return False, {"error": "login_failed"}
+            error_msg = "login_failed"
+            if data.get("notification"):
+                error_msg = data["notification"][0].get("content", error_msg)
+            self.logger.error(f"❌ فشل تسجيل الدخول: {error_msg}")
+            return False, {"error": error_msg}
 
         except Exception as e:
+            self.logger.error(f"❌ استثناء أثناء تسجيل الدخول: {e}")
             return False, {"error": str(e)}
 
     def ensure_login(self) -> bool:
@@ -213,8 +214,12 @@ class IChancyAPI:
         if self.scraper is None:
             self._init_scraper()
 
-        login = login or "u" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))
-        password = password or "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
+        login = login or "u" + "".join(
+            random.choice(string.ascii_lowercase + string.digits) for _ in range(7)
+        )
+        password = password or "".join(
+            random.choice(string.ascii_letters + string.digits) for _ in range(10)
+        )
         email = f"{login}@example.com"
 
         payload = {
@@ -233,14 +238,16 @@ class IChancyAPI:
             timeout=self.REQUEST_TIMEOUT,
         )
 
+        status_code = resp.status_code
         try:
             data = resp.json()
-        except:
+        except Exception:
+            self.logger.error("⚠️ create_player: JSON غير صالح")
             data = {}
 
         player_id = self.get_player_id(login)
 
-        return resp.status_code, data, login, password, player_id
+        return status_code, data, login, password, player_id
 
     # =========================
     # player_id
@@ -259,12 +266,17 @@ class IChancyAPI:
             timeout=self.REQUEST_TIMEOUT,
         )
 
+        if resp.status_code != 200:
+            self.logger.warning(f"⚠️ get_player_id HTTP {resp.status_code} for {login}")
+
         try:
             data = resp.json()
-        except:
+        except Exception:
+            self.logger.error("⚠️ get_player_id: JSON غير صالح")
             return None
 
-        for record in data.get("result", {}).get("records", []):
+        records: List[Dict] = data.get("result", {}).get("records", [])
+        for record in records:
             if record.get("username") == login:
                 return record.get("playerId")
 
@@ -304,14 +316,18 @@ class IChancyAPI:
             timeout=self.REQUEST_TIMEOUT,
         )
 
+        status_code = resp.status_code
         try:
             data = resp.json()
-        except:
+        except Exception:
+            self.logger.error(
+                "⚠️ create_player_with_credentials: JSON غير صالح"
+            )
             data = {}
 
         player_id = self.get_player_id(login)
 
-        return resp.status_code, data, player_id, email
+        return status_code, data, player_id, email
 
     # =========================
     # التحقق من الإيميل
@@ -332,10 +348,12 @@ class IChancyAPI:
 
         try:
             data = resp.json()
-        except:
+        except Exception:
+            self.logger.error("⚠️ check_email_exists: JSON غير صالح")
             return False
 
-        return any(record.get("email") == email for record in data.get("result", {}).get("records", []))
+        records: List[Dict] = data.get("result", {}).get("records", [])
+        return any(record.get("email") == email for record in records)
 
     # =========================
     # التحقق من اللاعب
@@ -356,10 +374,12 @@ class IChancyAPI:
 
         try:
             data = resp.json()
-        except:
+        except Exception:
+            self.logger.error("⚠️ check_player_exists: JSON غير صالح")
             return False
 
-        return any(record.get("username") == login for record in data.get("result", {}).get("records", []))
+        records: List[Dict] = data.get("result", {}).get("records", [])
+        return any(record.get("username") == login for record in records)
 
     # =========================
     # إيداع
@@ -385,12 +405,14 @@ class IChancyAPI:
             timeout=self.REQUEST_TIMEOUT,
         )
 
+        status_code = resp.status_code
         try:
             data = resp.json()
-        except:
+        except Exception:
+            self.logger.error("⚠️ deposit_to_player: JSON غير صالح")
             data = {}
 
-        return resp.status_code, data
+        return status_code, data
 
     # =========================
     # سحب
@@ -416,12 +438,14 @@ class IChancyAPI:
             timeout=self.REQUEST_TIMEOUT,
         )
 
+        status_code = resp.status_code
         try:
             data = resp.json()
-        except:
+        except Exception:
+            self.logger.error("⚠️ withdraw_from_player: JSON غير صالح")
             data = {}
 
-        return resp.status_code, data
+        return status_code, data
 
     # =========================
     # رصيد اللاعب
@@ -440,10 +464,12 @@ class IChancyAPI:
             timeout=self.REQUEST_TIMEOUT,
         )
 
+        status_code = resp.status_code
         try:
             data = resp.json()
-        except:
-            return resp.status_code, {}, 0.0
+        except Exception:
+            self.logger.error("⚠️ get_player_balance: JSON غير صالح")
+            return status_code, {}, 0.0
 
         results = data.get("result", [])
         balance = 0.0
@@ -451,10 +477,10 @@ class IChancyAPI:
         if isinstance(results, list) and results:
             try:
                 balance = float(results[0].get("balance", 0))
-            except:
+            except Exception:
                 balance = 0.0
 
-        return resp.status_code, data, balance
+        return status_code, data, balance
 
     # =========================
     # جميع اللاعبين
@@ -475,7 +501,8 @@ class IChancyAPI:
 
         try:
             data = resp.json()
-        except:
+        except Exception:
+            self.logger.error("⚠️ get_all_players: JSON غير صالح")
             return []
 
         return data.get("result", {}).get("records", [])
