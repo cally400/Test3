@@ -89,17 +89,24 @@ class IChancyAPI:
             self.logger.error(f"POST Error: {e}")
             return 500, {"error": str(e)}
 
+    # -----------------------------
+    # decorator ذكي
+    # -----------------------------
     def with_retry(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            status, data = func(self, *args, **kwargs)
+            result = func(self, *args, **kwargs)
 
-            # إذا الكوكيز منتهية → Playwright سيجددها تلقائيًا
-            if status in (401, 403):
-                self.logger.warning("الجلسة منتهية — انتظر التجديد التلقائي")
-                return status, data
+            # لو الدالة رجعت tuple فيها status
+            if isinstance(result, tuple) and len(result) >= 2:
+                status = result[0]
+                if status in (401, 403):
+                    self.logger.warning("الجلسة منتهية — انتظر التجديد التلقائي")
+                    return result
 
-            return status, data
+            # لو رجعت bool أو أي شيء آخر → رجّعه كما هو
+            return result
+
         return wrapper
 
     # -----------------------------
