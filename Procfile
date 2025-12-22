@@ -1,1 +1,1 @@
-web: gunicorn --bind 0.0.0.0:$PORT webhook_app:app
+web: python webhook_app.py
