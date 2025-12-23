@@ -1,14 +1,8 @@
-from ichancy_api import IChancyAPI
 import ichancy_create_account as ichancy_create
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os
 import db
-
-# =========================
-# تهيئة API
-# =========================
-api = IChancyAPI()
 
 # =========================
 # تهيئة البوت
@@ -41,46 +35,37 @@ def check_channel_membership(chat_id, user_id):
 def build_main_menu():
     kb = InlineKeyboardMarkup(row_width=2)
     
-    # I chancy - زر واحد
     kb.add(InlineKeyboardButton("🎮 I Chancy", callback_data="ichancy"))
     
-    # سحب رصيد / شحن رصيد - زرين بجانب بعض
     kb.row(
         InlineKeyboardButton("💸 سحب رصيد", callback_data="withdraw"),
         InlineKeyboardButton("💰 شحن رصيد", callback_data="deposit")
     )
     
-    # نظام الإحالات - زر واحد
     kb.add(InlineKeyboardButton("👥 نظام الإحالات", callback_data="referrals"))
     
-    # كود هدية / اهداء رصيد - زرين
     kb.row(
         InlineKeyboardButton("🎁 كود هدية", callback_data="gift_code"),
         InlineKeyboardButton("💝 اهداء رصيد", callback_data="gift_balance")
     )
     
-    # تواصل معنا / رسالة للادمن - زرين
     kb.row(
         InlineKeyboardButton("📞 تواصل معنا", callback_data="contact"),
         InlineKeyboardButton("✉️ رسالة للادمن", callback_data="admin_msg")
     )
     
-    # الشروحات / السجل - زرين
     kb.row(
         InlineKeyboardButton("📚 الشروحات", callback_data="tutorials"),
         InlineKeyboardButton("📜 السجل", callback_data="transactions")
     )
     
-    # ichancy apk / Vpn لتشغيل كافة اقسام الموقع - زرين
     kb.row(
         InlineKeyboardButton("📱 IChancy APK", callback_data="apk"),
         InlineKeyboardButton("🛡 VPN", callback_data="vpn")
     )
     
-    # الشروط والاحكام - زر واحد
     kb.add(InlineKeyboardButton("📄 الشروط والاحكام", callback_data="terms"))
     
-    # الجاكبوت - زر واحد
     kb.add(InlineKeyboardButton("🎰 الجاكبوت", callback_data="jackpot"))
     
     return kb
@@ -108,7 +93,6 @@ def send_welcome(message):
         except:
             pass
 
-    # مستخدم جديد
     if not user:
         if not check_channel_membership(CHANNEL_ID, user_id):
             show_channel_requirement(message, referral_id)
@@ -117,12 +101,10 @@ def send_welcome(message):
         show_terms(message, user_id, referral_id)
         return
 
-    # لم يقبل الشروط
     if not user.get("accepted_terms"):
         show_terms(message, user_id)
         return
 
-    # لم يتم توثيق الاشتراك
     if not user.get("joined_channel"):
         if not check_channel_membership(CHANNEL_ID, user_id):
             show_channel_requirement(message)
@@ -169,7 +151,7 @@ def show_terms(message, user_id, referral_id=None):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("check_join"))
 def handle_check_join(call):
     referral_id = call.data.split(":")[1]
-    referral_id = int(referral_id) if referral_id.isdigit() else None
+    referral_id = int(referral_id) if referral_id and referral_id.isdigit() else None
 
     if check_channel_membership(CHANNEL_ID, call.from_user.id):
         db.mark_channel_joined(call.from_user.id)
@@ -179,13 +161,13 @@ def handle_check_join(call):
         bot.answer_callback_query(call.id, "❌ غير مشترك")
 
 # =========================
-# قبول الشروط (مهم)
+# قبول الشروط
 # =========================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("accept_terms"))
 def handle_accept_terms(call):
     parts = call.data.split(":")
     user_id = int(parts[1])
-    referral_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+    referral_id = int(parts[2]) if len(parts) > 2 and parts[2] and parts[2].isdigit() else None
 
     if call.from_user.id != user_id:
         return
@@ -213,7 +195,6 @@ def handle_accept_terms(call):
         call.message.message_id
     )
 
-    # 🔥 إرسال القائمة فقط إذا كان جديد
     if is_new_user:
         show_main_menu(call.message)
 
@@ -277,7 +258,7 @@ def handle_ichancy(call):
     )
 
     bot.answer_callback_query(call.id)
-    
+
 # =========================
 # الرجوع للقائمة الرئيسية
 # =========================
@@ -292,7 +273,7 @@ def handle_back_main(call):
     )
     bot.answer_callback_query(call.id)
 
+
 @bot.callback_query_handler(func=lambda c: c.data == "ichancy_create")
 def handle_ichancy_create(call):
     ichancy_create.start_create_account(bot, call)
-
