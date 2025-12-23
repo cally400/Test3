@@ -11,7 +11,7 @@ api = None
 def get_api():
     """إرجاع API بدون إنشاءه أثناء Boot"""
     global api
-    return api   # ← لا ننشئ IChancyAPI هنا
+    return api
 
 
 def create_api_if_needed():
@@ -70,5 +70,11 @@ def save_session_from_api():
 
 
 def ensure_session():
-    """إنشاء API فقط عند الطلب — بدون تسجيل دخول"""
-    return create_api_if_needed()
+    """إنشاء API وتحميل الجلسة عند الطلب"""
+    _api = create_api_if_needed()
+
+    # تحميل الجلسة من الملف إذا لم تكن محملة
+    if not _api.is_logged_in:
+        load_session_into_api()
+
+    return _api
