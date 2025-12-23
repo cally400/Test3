@@ -58,6 +58,9 @@ class IChancyAPI:
 
         self.REQUEST_TIMEOUT = 25
 
+    # =========================
+    # إصلاح جذري: لا تسجيل دخول ولا رسائل أثناء Boot
+    # =========================
     def _init_scraper(self):
         self.scraper = cloudscraper.create_scraper(
             browser={
@@ -67,16 +70,9 @@ class IChancyAPI:
             }
         )
 
-        if self.session_cookies and self._is_session_valid():
+        # فقط تحميل الكوكيز إن وجدت — بدون أي تسجيل دخول
+        if self.session_cookies:
             self.scraper.cookies.update(self.session_cookies)
-            self.is_logged_in = True
-            self.logger.info("✅ تم استعادة الجلسة من الذاكرة")
-        else:
-            self.is_logged_in = False
-            self.session_cookies = {}
-            self.session_expiry = None
-            self.last_login_time = None
-            self.logger.info("🔄 بدء جلسة جديدة")
 
     def _is_session_valid(self) -> bool:
         if not self.session_expiry or not self.last_login_time:
