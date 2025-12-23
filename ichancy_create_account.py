@@ -11,11 +11,11 @@ def _random_suffix(length=3):
 def generate_username(raw_username: str) -> str:
     """إنشاء اسم مستخدم فريد"""
     api = ensure_session()
-    api.ensure_login()   # ← هذا السطر هو المفتاح   # ← استدعاء الجلسة هنا فقط
     base = f"ZEUS_{raw_username}"
 
     for i in range(6):
         username = base if i == 0 else f"{base}_{_random_suffix()}"
+        # 🔥 الآن check_player_exists يعمل بجلسة صحيحة
         if not api.check_player_exists(username):
             return username
 
@@ -83,10 +83,11 @@ def process_password_step(bot, message, telegram_id, username):
         return
 
     try:
-        api = ensure_session()   # ← استدعاء الجلسة هنا فقط
+        api = ensure_session()
 
         email = f"{username.lower()}@player.ichancy.com"
 
+        # التحقق النهائي قبل الإنشاء
         if api.check_player_exists(username):
             bot.send_message(message.chat.id, "❌ هذا الاسم مستخدم بالفعل، يرجى اختيار اسم آخر")
             return
