@@ -1,6 +1,6 @@
-from worker_functions import keep_session_alive
+import time
 
 if __name__ == '__main__':
-    print("🚀 Worker started - Keeping iChancy session alive")
-    keep_session_alive()
-  
+    print("🚀 Worker started - Idle mode (no login)")
+    while True:
+        time.sleep(60)
