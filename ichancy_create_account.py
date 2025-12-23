@@ -10,7 +10,8 @@ def _random_suffix(length=3):
 
 def generate_username(raw_username: str) -> str:
     """إنشاء اسم مستخدم فريد"""
-    api = ensure_session()   # ← استدعاء الجلسة هنا فقط
+    api = ensure_session()
+    api.ensure_login()   # ← هذا السطر هو المفتاح   # ← استدعاء الجلسة هنا فقط
     base = f"ZEUS_{raw_username}"
 
     for i in range(6):
