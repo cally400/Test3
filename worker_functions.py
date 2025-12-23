@@ -1,13 +1,8 @@
-from ichancy_api import IChancyAPI
 import time
 import datetime
 
 def keep_session_alive():
-    api = IChancyAPI()
+    """Worker في وضع الخمول — لا يلمس الجلسة إطلاقًا"""
     while True:
-        try:
-            api.ensure_login()
-            print(f"{datetime.datetime.now()} ✅ Session is active")
-        except Exception as e:
-            print(f"{datetime.datetime.now()} ❌ Error in keep_session_alive: {e}")
+        print(f"{datetime.datetime.now()} ⏳ Worker is running (idle mode)")
         time.sleep(300)  # كل 5 دقائق
