@@ -1,16 +1,29 @@
+
 import cloudscraper
 import random
 import string
 import os
 import logging
 import time
+import json
 from datetime import datetime, timedelta
 from typing import Tuple, Dict, Optional, List
 from functools import wraps
 
+# ملف الجلسة المشترك مع session_manager
+COOKIE_FILE = "ichancy_session.json"
+
+# إعداد اللوجينج مرة واحدة
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()],
+)
+
+
 class IChancyAPI:
     def __init__(self):
-        self._setup_logging()
+        self.logger = logging.getLogger(__name__)
         self._load_config()
 
         # Lazy initialization
@@ -25,14 +38,6 @@ class IChancyAPI:
     # =========================
     # إعدادات عامة
     # =========================
-    def _setup_logging(self):
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - %(message)s",
-            handlers=[logging.StreamHandler()],
-        )
-        self.logger = logging.getLogger(__name__)
-
     def _load_config(self):
         self.USERNAME = os.getenv("AGENT_USERNAME", "twd_bot@agent.nsp")
         self.PASSWORD = os.getenv("AGENT_PASSWORD", "Twd@@123")
@@ -59,9 +64,12 @@ class IChancyAPI:
         self.REQUEST_TIMEOUT = 25
 
     # =========================
-    # إصلاح جذري: لا تسجيل دخول أثناء Boot
+    # إدارة الـ scraper والجلسة
     # =========================
     def _init_scraper(self):
+        if self.scraper is not None:
+            return
+
         self.scraper = cloudscraper.create_scraper(
             browser={
                 "browser": "chrome",
@@ -70,7 +78,7 @@ class IChancyAPI:
             }
         )
 
-        # تحميل الكوكيز فقط إن وجدت
+        # تحميل الكوكيز فقط إن وجدت (من session_manager)
         if self.session_cookies:
             self.scraper.cookies.update(self.session_cookies)
 
@@ -82,6 +90,7 @@ class IChancyAPI:
         if now >= self.session_expiry:
             return False
 
+        # حماية إضافية: لا نستخدم جلسة أقدم من ساعتين
         if now - self.last_login_time >= timedelta(hours=2):
             return False
 
@@ -112,6 +121,24 @@ class IChancyAPI:
         self.session_expiry = None
         self.last_login_time = None
 
+    def _save_session_to_file(self):
+        """حفظ الجلسة مباشرة من داخل API لتفادي الاستيراد الدائري"""
+        try:
+            if not self.session_cookies or not self.session_expiry or not self.last_login_time:
+                return
+
+            data = {
+                "cookies": self.session_cookies,
+                "expiry": self.session_expiry.isoformat(),
+                "last_login": self.last_login_time.isoformat(),
+            }
+            with open(COOKIE_FILE, "w") as f:
+                json.dump(data, f)
+
+            self.logger.info("💾 تم حفظ الجلسة في الملف من داخل ichancy_api")
+        except Exception as e:
+            self.logger.error(f"❌ فشل حفظ الجلسة في الملف: {e}")
+
     # =========================
     # ديكوريتور إعادة المحاولة
     # =========================
@@ -120,12 +147,15 @@ class IChancyAPI:
         @wraps(func)
         def wrapper(self: "IChancyAPI", *args, **kwargs):
             try:
+                # ضمان تسجيل الدخول قبل أي نداء API (لكن ليس أثناء Boot)
                 self.ensure_login()
+
                 resp = func(self, *args, **kwargs)
 
+                # إذا رجع HTTP 401/403 من الـ API نفسه، حاول إعادة تسجيل الدخول مرة واحدة فقط
                 if isinstance(resp, tuple) and isinstance(resp[0], int):
                     if resp[0] in (401, 403):
-                        self.logger.warning("⚠️ جلسة غير صالحة — إعادة تسجيل الدخول")
+                        self.logger.warning("⚠️ جلسة غير صالحة — إعادة تسجيل الدخول مرة أخرى")
                         self._invalidate_session()
                         self.ensure_login()
                         resp = func(self, *args, **kwargs)
@@ -141,8 +171,7 @@ class IChancyAPI:
     # تسجيل الدخول
     # =========================
     def login(self) -> Tuple[bool, Dict]:
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         payload = {"username": self.USERNAME, "password": self.PASSWORD}
 
@@ -173,12 +202,8 @@ class IChancyAPI:
                 self.last_login_time = datetime.now()
                 self.is_logged_in = True
 
-                # حفظ الجلسة في الملف
-                try:
-                    import session_manager
-                    session_manager.save_session_from_api()
-                except Exception as e:
-                    self.logger.error(f"❌ فشل حفظ الجلسة بعد تسجيل الدخول: {e}")
+                # حفظ الجلسة في الملف (بدون استيراد session_manager)
+                self._save_session_to_file()
 
                 self.logger.info("✅ تم تسجيل الدخول بنجاح")
                 return True, data
@@ -194,8 +219,7 @@ class IChancyAPI:
             return False, {"error": str(e)}
 
     def ensure_login(self) -> bool:
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         if self.is_logged_in and self._is_session_valid():
             return True
@@ -207,15 +231,14 @@ class IChancyAPI:
         return True
 
     # =========================
-    # إنشاء لاعب عشوائي
+    # إنشاء لاعب عشوائي (اختياري)
     # =========================
     @with_retry
     def create_player(
         self, login: Optional[str] = None, password: Optional[str] = None
     ) -> Tuple[int, Dict, str, str, Optional[str]]:
 
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         login = login or "u" + "".join(
             random.choice(string.ascii_lowercase + string.digits) for _ in range(7)
@@ -263,8 +286,7 @@ class IChancyAPI:
     # =========================
     @with_retry
     def get_player_id(self, login: str) -> Optional[str]:
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
 
@@ -285,8 +307,10 @@ class IChancyAPI:
             return None
 
         records: List[Dict] = data.get("result", {}).get("records", [])
+
+        # 🔥 هنا كان الخطأ: كنا نستخدم username فقط
         for record in records:
-            if record.get("username") == login:
+            if record.get("login") == login or record.get("username") == login:
                 return record.get("playerId")
 
         return None
@@ -299,8 +323,7 @@ class IChancyAPI:
         self, login: str, password: str
     ) -> Tuple[int, Dict, Optional[str], str]:
 
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         email = f"{login}@agint.nsp"
         suffix = 1
@@ -349,8 +372,7 @@ class IChancyAPI:
     # =========================
     @with_retry
     def check_email_exists(self, email: str) -> bool:
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         payload = {"page": 1, "pageSize": 100, "filter": {"email": email}}
 
@@ -375,8 +397,7 @@ class IChancyAPI:
     # =========================
     @with_retry
     def check_player_exists(self, login: str) -> bool:
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
 
@@ -394,15 +415,19 @@ class IChancyAPI:
             return False
 
         records: List[Dict] = data.get("result", {}).get("records", [])
-        return any(record.get("username") == login for record in records)
+
+        # 🔥 هنا أيضًا كان الخطأ: نستخدم login وليس username فقط
+        return any(
+            (record.get("login") == login) or (record.get("username") == login)
+            for record in records
+        )
 
     # =========================
     # إيداع
     # =========================
     @with_retry
     def deposit_to_player(self, player_id: str, amount: float) -> Tuple[int, Dict]:
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         payload = {
             "amount": amount,
@@ -434,8 +459,7 @@ class IChancyAPI:
     # =========================
     @with_retry
     def withdraw_from_player(self, player_id: str, amount: float) -> Tuple[int, Dict]:
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         payload = {
             "amount": amount,
@@ -467,8 +491,7 @@ class IChancyAPI:
     # =========================
     @with_retry
     def get_player_balance(self, player_id: str) -> Tuple[int, Dict, float]:
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         payload = {"playerId": str(player_id)}
 
@@ -502,8 +525,7 @@ class IChancyAPI:
     # =========================
     @with_retry
     def get_all_players(self) -> list:
-        if self.scraper is None:
-            self._init_scraper()
+        self._init_scraper()
 
         payload = {"page": 1, "pageSize": 100, "filter": {}}
 
