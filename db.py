@@ -20,9 +20,6 @@ db = client["ichancy_bot"]
 # ============================
 
 users = db.users
-transactions = db.transactions
-referrals = db.referrals
-
 # ============================
 # إنشاء الفهارس (بدون كسر الإقلاع)
 # ============================
