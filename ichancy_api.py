@@ -60,7 +60,7 @@ class IChancyAPI:
         self.REQUEST_TIMEOUT = 25
 
     # =========================
-    # إصلاح جذري: لا تسجيل دخول ولا رسائل أثناء Boot
+    # إصلاح جذري: لا تسجيل دخول أثناء Boot
     # =========================
     def _init_scraper(self):
         self.scraper = cloudscraper.create_scraper(
@@ -71,7 +71,7 @@ class IChancyAPI:
             }
         )
 
-        # فقط تحميل الكوكيز إن وجدت — بدون أي تسجيل دخول
+        # تحميل الكوكيز فقط إن وجدت
         if self.session_cookies:
             self.scraper.cookies.update(self.session_cookies)
 
@@ -174,16 +174,16 @@ class IChancyAPI:
                 self.last_login_time = datetime.now()
                 self.is_logged_in = True
 
-    # حفظ الجلسة في الملف
-            try:
-                from session_manager import save_session_from_api
+                # حفظ الجلسة في الملف
+                try:
+                    from session_manager import save_session_from_api
                     save_session_from_api()
-            except Exception as e:
-                self.logger.error(f"❌ فشل حفظ الجلسة بعد تسجيل الدخول: {e}")
+                except Exception as e:
+                    self.logger.error(f"❌ فشل حفظ الجلسة بعد تسجيل الدخول: {e}")
 
                 self.logger.info("✅ تم تسجيل الدخول بنجاح")
                 return True, data
- 
+
             error_msg = "login_failed"
             if data.get("notification"):
                 error_msg = data["notification"][0].get("content", error_msg)
