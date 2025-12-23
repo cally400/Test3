@@ -174,9 +174,16 @@ class IChancyAPI:
                 self.last_login_time = datetime.now()
                 self.is_logged_in = True
 
+    # حفظ الجلسة في الملف
+            try:
+                from session_manager import save_session_from_api
+                    save_session_from_api()
+            except Exception as e:
+                self.logger.error(f"❌ فشل حفظ الجلسة بعد تسجيل الدخول: {e}")
+
                 self.logger.info("✅ تم تسجيل الدخول بنجاح")
                 return True, data
-
+ 
             error_msg = "login_failed"
             if data.get("notification"):
                 error_msg = data["notification"][0].get("content", error_msg)
