@@ -9,15 +9,14 @@ api = None
 
 
 def get_api():
-    """إنشاء API عند الحاجة فقط"""
     global api
     if api is None:
         api = IChancyAPI()
     return api
 
 
-def load_session():
-    """تحميل الجلسة من الملف فقط — بدون تسجيل دخول"""
+def load_session_into_api():
+    """تحميل الجلسة داخل API فقط عند الحاجة"""
     if not os.path.exists(COOKIE_FILE):
         return False
 
@@ -43,7 +42,7 @@ def load_session():
         return False
 
 
-def save_session():
+def save_session_from_api():
     """حفظ الجلسة بعد تسجيل الدخول فقط"""
     try:
         _api = get_api()
@@ -61,13 +60,5 @@ def save_session():
 
 
 def ensure_session():
-    """
-    إرجاع API فقط — بدون تسجيل دخول
-    تسجيل الدخول يتم فقط عند أول API call داخل ichancy_api
-    """
-    _api = get_api()
-
-    # تحميل الجلسة فقط — بدون تسجيل دخول
-    load_session()
-
-    return _api
+    """إرجاع API فقط — بدون تحميل جلسة وبدون تسجيل دخول"""
+    return get_api()
