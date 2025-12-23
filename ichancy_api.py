@@ -1,3 +1,4 @@
+import cloudscraper
 import random
 import string
 import os
