@@ -20,6 +20,9 @@ db = client["ichancy_bot"]
 # ============================
 
 users = db.users
+transactions = db.transactions
+referrals = db.referrals
+
 # ============================
 # إنشاء الفهارس (بدون كسر الإقلاع)
 # ============================
@@ -65,6 +68,7 @@ ensure_indexes()
 def get_user(telegram_id):
     return users.find_one({"telegram_id": telegram_id})
 
+
 def create_user(telegram_id, username, first_name, last_name):
     user_data = {
         "telegram_id": telegram_id,
@@ -86,15 +90,16 @@ def create_user(telegram_id, username, first_name, last_name):
         "joined_channel": False,
         "is_active": True,
         "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
+        "updated_at": datetime.utcnow(),
     }
-    
+
     try:
         users.insert_one(user_data)
         return True
     except Exception as e:
         print(f"❌ خطأ في إنشاء المستخدم: {e}")
         return False
+
 
 def update_user(telegram_id, update_data):
     update_data["updated_at"] = datetime.utcnow()
@@ -103,45 +108,52 @@ def update_user(telegram_id, update_data):
         {"$set": update_data}
     )
 
+
 def accept_terms(telegram_id):
     return update_user(telegram_id, {"accepted_terms": True})
+
 
 def mark_channel_joined(telegram_id):
     return update_user(telegram_id, {"joined_channel": True})
 
+
 def update_player_info(telegram_id, player_id, player_username, player_email, player_password):
-    return update_user(telegram_id, {
-        "player_id": player_id,
-        "player_username": player_username,
-        "player_email": player_email,
-        "player_password": player_password
-    })
+    return update_user(
+        telegram_id,
+        {
+            "player_id": player_id,
+            "player_username": player_username,
+            "player_email": player_email,
+            "player_password": player_password,
+        },
+    )
+
 
 def update_balance(telegram_id, amount, is_withdrawal=False):
     user = get_user(telegram_id)
     if not user:
         return False
-    
-    new_balance = user["balance"] + amount
-    
+
+    new_balance = user.get("balance", 0.0) + amount
+
     transaction_type = "withdrawal" if is_withdrawal else "deposit"
     status = "completed" if amount > 0 else "pending"
-    
+
     log_transaction(
         telegram_id=telegram_id,
         player_id=user.get("player_id"),
         amount=abs(amount),
         ttype=transaction_type,
-        status=status
+        status=status,
     )
-    
+
     update_data = {"balance": new_balance}
-    
+
     if amount > 0:
         update_data["total_earned"] = user.get("total_earned", 0) + amount
     elif is_withdrawal and amount < 0:
         update_data["total_withdrawn"] = user.get("total_withdrawn", 0) + abs(amount)
-    
+
     return update_user(telegram_id, update_data)
 
 # ============================
@@ -156,46 +168,48 @@ def add_referral(referrer_id, referred_id):
         "has_deposited": False,
         "referral_reward": 0.0,
         "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
+        "updated_at": datetime.utcnow(),
     }
-    
+
     try:
         referrals.insert_one(referral_data)
         users.update_one(
             {"telegram_id": referrer_id},
-            {"$inc": {"referrals_count": 1}}
+            {"$inc": {"referrals_count": 1}},
         )
         return True
     except Exception as e:
         print(f"❌ خطأ في إضافة الإحالة: {e}")
         return False
 
+
 def activate_referral(referred_id):
     referral = referrals.find_one({"referred_id": referred_id})
     if not referral:
         return False
-    
+
     referrals.update_one(
         {"referred_id": referred_id},
-        {"$set": {"is_active": True, "has_deposited": True}}
+        {"$set": {"is_active": True, "has_deposited": True}},
     )
-    
+
     users.update_one(
         {"telegram_id": referral["referrer_id"]},
-        {"$inc": {"active_referrals_count": 1}}
+        {"$inc": {"active_referrals_count": 1}},
     )
-    
+
     reward_amount = float(os.getenv("REFERRAL_REWARD", "5.0"))
+
     users.update_one(
         {"telegram_id": referral["referrer_id"]},
-        {"$inc": {"referral_balance": reward_amount}}
+        {"$inc": {"referral_balance": reward_amount}},
     )
-    
+
     referrals.update_one(
         {"referred_id": referred_id},
-        {"$set": {"referral_reward": reward_amount}}
+        {"$set": {"referral_reward": reward_amount}},
     )
-    
+
     return True
 
 # ============================
@@ -203,41 +217,51 @@ def activate_referral(referred_id):
 # ============================
 
 def log_transaction(telegram_id, player_id, amount, ttype, status="pending"):
-    return transactions.insert_one({
-        "telegram_id": telegram_id,
-        "player_id": player_id,
-        "type": ttype,
-        "amount": amount,
-        "status": status,
-        "created_at": datetime.utcnow()
-    })
+    return transactions.insert_one(
+        {
+            "telegram_id": telegram_id,
+            "player_id": player_id,
+            "type": ttype,
+            "amount": amount,
+            "status": status,
+            "created_at": datetime.utcnow(),
+        }
+    )
+
 
 def get_user_transactions(telegram_id, limit=10, transaction_type=None):
     query = {"telegram_id": telegram_id}
     if transaction_type:
         query["type"] = transaction_type
-    return list(transactions.find(query).sort("created_at", -1).limit(limit))
+    return list(
+        transactions.find(query).sort("created_at", -1).limit(limit)
+    )
+
 
 def get_user_referrals(telegram_id):
     return list(referrals.find({"referrer_id": telegram_id}))
+
 
 def get_user_stats(telegram_id):
     user = get_user(telegram_id)
     if not user:
         return None
-    
+
     referrals_list = get_user_referrals(telegram_id)
     transactions_list = get_user_transactions(telegram_id, limit=20)
-    
+
     return {
         "user": user,
         "referrals": referrals_list,
         "transactions": transactions_list,
         "stats": {
             "total_referrals": len(referrals_list),
-            "active_referrals": len([r for r in referrals_list if r.get("is_active")]),
-            "total_referral_rewards": sum(r.get("referral_reward", 0) for r in referrals_list),
-            "total_transactions": len(transactions_list)
-        }
+            "active_referrals": len(
+                [r for r in referrals_list if r.get("is_active")]
+            ),
+            "total_referral_rewards": sum(
+                r.get("referral_reward", 0) for r in referrals_list
+            ),
+            "total_transactions": len(transactions_list),
+        },
     }
-
