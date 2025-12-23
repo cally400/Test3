@@ -1,8 +1,8 @@
-import cloudscraper
 import random
 import string
 import os
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Tuple, Dict, Optional, List
 from functools import wraps
@@ -241,7 +241,13 @@ class IChancyAPI:
             self.logger.error("⚠️ create_player: JSON غير صالح")
             data = {}
 
-        player_id = self.get_player_id(login)
+        # Retry للحصول على player_id
+        player_id = None
+        for _ in range(5):
+            player_id = self.get_player_id(login)
+            if player_id:
+                break
+            time.sleep(1)
 
         return status_code, data, login, password, player_id
 
@@ -321,7 +327,13 @@ class IChancyAPI:
             )
             data = {}
 
-        player_id = self.get_player_id(login)
+        # Retry للحصول على player_id
+        player_id = None
+        for _ in range(5):
+            player_id = self.get_player_id(login)
+            if player_id:
+                break
+            time.sleep(1)
 
         return status_code, data, player_id, email
 
