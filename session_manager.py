@@ -49,26 +49,6 @@ def load_session_into_api():
         return False
 
 
-def save_session_from_api():
-    """حفظ الجلسة بعد تسجيل الدخول فقط"""
-    try:
-        _api = get_api()
-        if _api is None:
-            return
-
-        data = {
-            "cookies": _api.session_cookies,
-            "expiry": _api.session_expiry.isoformat(),
-            "last_login": _api.last_login_time.isoformat(),
-        }
-        with open(COOKIE_FILE, "w") as f:
-            json.dump(data, f)
-
-        print("💾 تم حفظ الجلسة في الملف")
-    except Exception as e:
-        print("❌ فشل حفظ الجلسة:", e)
-
-
 def ensure_session():
     """إنشاء API وتحميل الجلسة عند الطلب"""
     _api = create_api_if_needed()
