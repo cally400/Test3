@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 from typing import Tuple, Dict, Optional, List
 from functools import wraps
 
+with open("test_write.txt", "w") as f:
+    f.write("hello railway")
+
 
 class IChancyAPI:
     def __init__(self):
