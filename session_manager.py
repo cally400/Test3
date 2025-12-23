@@ -9,6 +9,13 @@ api = None
 
 
 def get_api():
+    """إرجاع API بدون إنشاءه أثناء Boot"""
+    global api
+    return api   # ← لا ننشئ IChancyAPI هنا
+
+
+def create_api_if_needed():
+    """إنشاء API فقط عند أول عملية API من المستخدم"""
     global api
     if api is None:
         api = IChancyAPI()
@@ -28,7 +35,7 @@ def load_session_into_api():
         if expiry < datetime.now():
             return False
 
-        _api = get_api()
+        _api = create_api_if_needed()
         _api.session_cookies = data["cookies"]
         _api.session_expiry = expiry
         _api.last_login_time = datetime.fromisoformat(data["last_login"])
@@ -46,6 +53,9 @@ def save_session_from_api():
     """حفظ الجلسة بعد تسجيل الدخول فقط"""
     try:
         _api = get_api()
+        if _api is None:
+            return
+
         data = {
             "cookies": _api.session_cookies,
             "expiry": _api.session_expiry.isoformat(),
@@ -60,5 +70,5 @@ def save_session_from_api():
 
 
 def ensure_session():
-    """إرجاع API فقط — بدون تحميل جلسة وبدون تسجيل دخول"""
-    return get_api()
+    """إنشاء API فقط عند الطلب — بدون تسجيل دخول"""
+    return create_api_if_needed()
