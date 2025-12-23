@@ -5,12 +5,11 @@ from ichancy_api import IChancyAPI
 
 COOKIE_FILE = "ichancy_session.json"
 
-# لا ننشئ API هنا
 api = None
 
 
 def get_api():
-    """إنشاء API عند الحاجة فقط (Lazy Initialization)"""
+    """إنشاء API عند الحاجة فقط"""
     global api
     if api is None:
         api = IChancyAPI()
@@ -18,7 +17,7 @@ def get_api():
 
 
 def load_session():
-    """تحميل الجلسة من ملف JSON إذا كانت صالحة"""
+    """تحميل الجلسة من الملف فقط — بدون تسجيل دخول"""
     if not os.path.exists(COOKIE_FILE):
         return False
 
@@ -45,7 +44,7 @@ def load_session():
 
 
 def save_session():
-    """حفظ الجلسة في ملف JSON"""
+    """حفظ الجلسة بعد تسجيل الدخول فقط"""
     try:
         _api = get_api()
         data = {
@@ -63,16 +62,12 @@ def save_session():
 
 def ensure_session():
     """
-    إرجاع API جاهز للاستخدام:
-    - تحميل الجلسة من الملف إن وجدت
-    - إذا لم توجد جلسة → تسجيل دخول عند الحاجة فقط
+    إرجاع API فقط — بدون تسجيل دخول
+    تسجيل الدخول يتم فقط عند أول API call داخل ichancy_api
     """
     _api = get_api()
 
-    # إذا تم تحميل الجلسة من الملف → نرجع API بدون تسجيل دخول
-    if load_session():
-        return _api
+    # تحميل الجلسة فقط — بدون تسجيل دخول
+    load_session()
 
-    # لا نسجل الدخول هنا إلا عند أول عملية API
-    # فقط نرجع API فارغ، وسيقوم ensure_login داخل ichancy_api بالعمل عند الحاجة
     return _api
