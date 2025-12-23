@@ -175,8 +175,8 @@ class IChancyAPI:
 
                 # حفظ الجلسة في الملف
                 try:
-                    from session_manager import save_session_from_api
-                    save_session_from_api()
+                    import session_manager
+                    session_manager.save_session_from_api()
                 except Exception as e:
                     self.logger.error(f"❌ فشل حفظ الجلسة بعد تسجيل الدخول: {e}")
 
