@@ -11,12 +11,21 @@ def _random_suffix(length=3):
 def generate_username(raw_username: str) -> str:
     """إنشاء اسم مستخدم فريد"""
     api = ensure_session()
+
+    # تنظيف الاسم قبل البناء
+    raw_username = ''.join(c for c in raw_username if c.isalnum() or c in ['_', '-'])
     base = f"ZEUS_{raw_username}"
 
     for i in range(6):
         username = base if i == 0 else f"{base}_{_random_suffix()}"
-        # 🔥 الآن check_player_exists يعمل بجلسة صحيحة
-        if not api.check_player_exists(username):
+
+        try:
+            exists = api.check_player_exists(username)
+        except:
+            # حماية إضافية: لو API فشل → نعيد المحاولة
+            continue
+
+        if not exists:
             return username
 
     raise ValueError("❌ اسم المستخدم غير متاح، جرّب اسمًا آخر")
@@ -34,6 +43,11 @@ def start_create_account(bot, call):
 
 
 def process_username_step(bot, message, telegram_id):
+    # حماية: لو المستخدم أرسل صورة/صوت/ملف
+    if not message.text:
+        bot.send_message(message.chat.id, "❌ الرجاء إرسال نص فقط")
+        return start_create_account(bot, message)
+
     raw_username = message.text.strip()
     raw_username = ''.join(c for c in raw_username if c.isalnum() or c in ['_', '-'])
 
@@ -68,6 +82,10 @@ def process_username_step(bot, message, telegram_id):
 
 
 def process_password_step(bot, message, telegram_id, username):
+    if not message.text:
+        bot.send_message(message.chat.id, "❌ الرجاء إرسال كلمة مرور نصية")
+        return
+
     password = message.text.strip()
 
     if len(password) < 8:
