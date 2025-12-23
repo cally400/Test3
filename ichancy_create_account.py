@@ -3,8 +3,6 @@ import string
 import db
 from session_manager import ensure_session
 
-api = ensure_session()
-
 
 def _random_suffix(length=3):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
@@ -12,12 +10,14 @@ def _random_suffix(length=3):
 
 def generate_username(raw_username: str) -> str:
     """إنشاء اسم مستخدم فريد"""
+    api = ensure_session()   # ← استدعاء الجلسة هنا فقط
     base = f"ZEUS_{raw_username}"
+
     for i in range(6):
         username = base if i == 0 else f"{base}_{_random_suffix()}"
-        # التحقق أولاً إذا كان المستخدم موجود
         if not api.check_player_exists(username):
             return username
+
     raise ValueError("❌ اسم المستخدم غير متاح، جرّب اسمًا آخر")
 
 
@@ -42,6 +42,7 @@ def process_username_step(bot, message, telegram_id):
 
     try:
         username = generate_username(raw_username)
+
         bot.send_message(
             message.chat.id,
             f"✅ الاسم متاح: `{username}`\n\n"
@@ -52,10 +53,12 @@ def process_username_step(bot, message, telegram_id):
             f"مثال: `Pass1234`",
             parse_mode="Markdown"
         )
+
         bot.register_next_step_handler_by_chat_id(
             message.chat.id,
             lambda msg: process_password_step(bot, msg, telegram_id, username)
         )
+
     except Exception as e:
         bot.send_message(
             message.chat.id,
@@ -79,6 +82,8 @@ def process_password_step(bot, message, telegram_id, username):
         return
 
     try:
+        api = ensure_session()   # ← استدعاء الجلسة هنا فقط
+
         email = f"{username.lower()}@player.ichancy.com"
 
         if api.check_player_exists(username):
