@@ -5,7 +5,16 @@ from ichancy_api import IChancyAPI
 
 COOKIE_FILE = "ichancy_session.json"
 
-api = IChancyAPI()
+# لا ننشئ API هنا
+api = None
+
+
+def get_api():
+    """إنشاء API عند الحاجة فقط (Lazy Initialization)"""
+    global api
+    if api is None:
+        api = IChancyAPI()
+    return api
 
 
 def load_session():
@@ -21,13 +30,15 @@ def load_session():
         if expiry < datetime.now():
             return False
 
-        api.session_cookies = data["cookies"]
-        api.session_expiry = expiry
-        api.last_login_time = datetime.fromisoformat(data["last_login"])
-        api.is_logged_in = True
+        _api = get_api()
+        _api.session_cookies = data["cookies"]
+        _api.session_expiry = expiry
+        _api.last_login_time = datetime.fromisoformat(data["last_login"])
+        _api.is_logged_in = True
 
         print("✅ تم تحميل الجلسة من الملف")
         return True
+
     except Exception as e:
         print("❌ فشل تحميل الجلسة:", e)
         return False
@@ -36,10 +47,11 @@ def load_session():
 def save_session():
     """حفظ الجلسة في ملف JSON"""
     try:
+        _api = get_api()
         data = {
-            "cookies": api.session_cookies,
-            "expiry": api.session_expiry.isoformat(),
-            "last_login": api.last_login_time.isoformat(),
+            "cookies": _api.session_cookies,
+            "expiry": _api.session_expiry.isoformat(),
+            "last_login": _api.last_login_time.isoformat(),
         }
         with open(COOKIE_FILE, "w") as f:
             json.dump(data, f)
@@ -50,11 +62,17 @@ def save_session():
 
 
 def ensure_session():
-    """تحميل الجلسة أو تسجيل الدخول ثم حفظها"""
-    if load_session():
-        return api
+    """
+    إرجاع API جاهز للاستخدام:
+    - تحميل الجلسة من الملف إن وجدت
+    - إذا لم توجد جلسة → تسجيل دخول عند الحاجة فقط
+    """
+    _api = get_api()
 
-    print("🔄 لا توجد جلسة صالحة — تسجيل دخول جديد...")
-    api.ensure_login()
-    save_session()
-    return api
+    # إذا تم تحميل الجلسة من الملف → نرجع API بدون تسجيل دخول
+    if load_session():
+        return _api
+
+    # لا نسجل الدخول هنا إلا عند أول عملية API
+    # فقط نرجع API فارغ، وسيقوم ensure_login داخل ichancy_api بالعمل عند الحاجة
+    return _api
