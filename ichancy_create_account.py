@@ -21,7 +21,7 @@ def generate_username(raw_username: str) -> str:
 
         try:
             exists = api.check_player_exists(username)
-        except:
+        except Exception:
             # حماية إضافية: لو API فشل → نعيد المحاولة
             continue
 
@@ -43,7 +43,6 @@ def start_create_account(bot, call):
 
 
 def process_username_step(bot, message, telegram_id):
-    # حماية: لو المستخدم أرسل صورة/صوت/ملف
     if not message.text:
         bot.send_message(message.chat.id, "❌ الرجاء إرسال نص فقط")
         return start_create_account(bot, message)
@@ -102,7 +101,6 @@ def process_password_step(bot, message, telegram_id, username):
 
     try:
         api = ensure_session()
-
         email = f"{username.lower()}@player.ichancy.com"
 
         # التحقق النهائي قبل الإنشاء
@@ -116,13 +114,14 @@ def process_password_step(bot, message, telegram_id, username):
             error_msg = "فشل إنشاء الحساب"
             if data and isinstance(data, dict):
                 notifications = data.get("notification", [])
-                if notifications and isinstance(notifications, list):
+                if notifications and isinstance(notifications, list) and notifications:
                     error_msg = notifications[0].get("content", error_msg)
             raise ValueError(error_msg)
 
         if not player_id:
             raise ValueError("لم يتم إنشاء معرف اللاعب")
 
+        # تحديث قاعدة البيانات
         db.update_player_info(telegram_id, player_id, username, email_created or email, password)
 
         login_info = f"""
@@ -146,16 +145,6 @@ https://www.ichancy.com/login
 
         bot.send_message(message.chat.id, login_info, parse_mode="Markdown")
 
-        bot.send_message(
-            message.chat.id,
-            f"💾 **احفظ هذه البيانات:**\n\n"
-            f"الموقع: https://www.ichancy.com\n"
-            f"المستخدم: {username}\n"
-            f"كلمة المرور: {password}\n"
-            f"الإيميل: {email_created or email}",
-            parse_mode="Markdown"
-        )
-
     except Exception as e:
         bot.send_message(
             message.chat.id,
@@ -163,3 +152,4 @@ https://www.ichancy.com/login
             f"يرجى المحاولة مرة أخرى لاحقاً أو التواصل مع الدعم.",
             parse_mode="Markdown"
         )
+
