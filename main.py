@@ -1,6 +1,9 @@
 import os
+import threading
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from flask import Flask
+
 import db
 import ichancy_create_account as ichancy_create
 
@@ -14,10 +17,19 @@ if not TOKEN:
 bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 
 # =========================
+# Web server (مهم لـ Railway)
+# =========================
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is running"
+
+# =========================
 # إعدادات القناة
 # =========================
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-CHANNEL_INVITE_LINK = os.getenv("CHANNEL_INVITE_LINK")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
+CHANNEL_INVITE_LINK = os.getenv("CHANNEL_INVITE_LINK", "")
 
 # =========================
 # التحقق من الاشتراك
@@ -26,7 +38,7 @@ def check_channel_membership(chat_id, user_id):
     try:
         member = bot.get_chat_member(chat_id, user_id)
         return member.status in ["member", "administrator", "creator"]
-    except:
+    except Exception:
         return False
 
 # =========================
@@ -69,7 +81,6 @@ def build_main_menu():
 
     return kb
 
-
 def show_main_menu(message):
     bot.send_message(
         message.chat.id,
@@ -85,29 +96,24 @@ def send_welcome(message):
     user_id = message.from_user.id
     user = db.get_user(user_id)
 
-    # نظام الإحالات
     referral_id = None
     if len(message.text.split()) > 1:
         try:
             referral_id = int(message.text.split()[1])
-        except:
+        except Exception:
             pass
 
-    # مستخدم جديد
     if not user:
         if not check_channel_membership(CHANNEL_ID, user_id):
             show_channel_requirement(message, referral_id)
             return
-
         show_terms(message, user_id, referral_id)
         return
 
-    # لم يقبل الشروط
     if not user.get("accepted_terms"):
         show_terms(message, user_id)
         return
 
-    # لم ينضم للقناة
     if not user.get("joined_channel"):
         if not check_channel_membership(CHANNEL_ID, user_id):
             show_channel_requirement(message)
@@ -169,7 +175,7 @@ def handle_check_join(call):
 def handle_accept_terms(call):
     parts = call.data.split(":")
     user_id = int(parts[1])
-    referral_id = int(parts[2]) if len(parts) > 2 and parts[2] and parts[2].isdigit() else None
+    referral_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
 
     if call.from_user.id != user_id:
         return
@@ -208,7 +214,7 @@ def handle_reject_terms(call):
     bot.send_message(call.message.chat.id, "❌ لا يمكن استخدام البوت بدون قبول الشروط")
 
 # =========================
-# معالجة I Chancy
+# I Chancy
 # =========================
 @bot.callback_query_handler(func=lambda c: c.data == "ichancy")
 def handle_ichancy(call):
@@ -232,34 +238,26 @@ def handle_ichancy(call):
             InlineKeyboardButton("💰 تعبئة رصيد في الموقع", callback_data="ichancy_deposit"),
             InlineKeyboardButton("💸 سحب رصيد من الموقع", callback_data="ichancy_withdraw")
         )
-        text = (
-            "🎮 **I Chancy**\n\n"
-            "✅ تم العثور على حسابك في الموقع\n\n"
-            "اختر العملية المطلوبة:"
-        )
+        text = "🎮 **I Chancy**\n\n✅ تم العثور على حسابك"
     else:
         keyboard.add(
             InlineKeyboardButton("➕ إنشاء حساب iChancy", callback_data="ichancy_create")
         )
-        text = (
-            "🎮 **I Chancy**\n\n"
-            "❌ لا يوجد لديك حساب في الموقع\n\n"
-            "اضغط على إنشاء حساب للمتابعة:"
-        )
+        text = "🎮 **I Chancy**\n\n❌ لا يوجد لديك حساب"
 
     keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="back_main"))
 
     bot.edit_message_text(
-        text=text,
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
+        text,
+        call.message.chat.id,
+        call.message.message_id,
         reply_markup=keyboard
     )
 
     bot.answer_callback_query(call.id)
 
 # =========================
-# الرجوع للقائمة الرئيسية
+# رجوع
 # =========================
 @bot.callback_query_handler(func=lambda c: c.data == "back_main")
 def handle_back_main(call):
@@ -279,8 +277,13 @@ def handle_ichancy_create(call):
     ichancy_create.start_create_account(bot, call)
 
 # =========================
-# تشغيل البوت (Polling)
+# تشغيل البوت
 # =========================
-if __name__ == "__main__":
-    print("🚀 Bot is running with polling...")
+def run_bot():
+    print("🚀 Bot polling started")
     bot.infinity_polling(skip_pending=True)
+
+if __name__ == "__main__":
+    threading.Thread(target=run_bot).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
+
