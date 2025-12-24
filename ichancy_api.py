@@ -1,45 +1,58 @@
 import cloudscraper
-import random
-import string
 import os
 import logging
 import time
 import json
+import redis
 from datetime import datetime, timedelta
-from typing import Tuple, Dict, Optional, List
 from functools import wraps
 
-COOKIE_FILE = "ichancy_session.json"
-
-# إعداد اللوجينج مرة واحدة فقط
+# =========================
+# Logging
+# =========================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()],
 )
+logger = logging.getLogger("IChancyAPI")
+
+# =========================
+# Redis key (جلسة واحدة فقط)
+# =========================
+REDIS_SESSION_KEY = "ichancy:global_session"
+REDIS_LOCK_KEY = "ichancy:login_lock"
 
 
 class IChancyAPI:
+    """
+    🔐 Global Agent Session
+    - Session واحدة لكل المستخدمين
+    - Redis للتخزين
+    - Auto re-login
+    """
+
     def __init__(self):
-        self.logger = logging.getLogger("IChancyAPI")
         self._load_config()
 
-        # Lazy initialization
         self.scraper = None
+        self.redis = None
 
-        # Session state
         self.is_logged_in = False
         self.session_cookies = {}
         self.session_expiry = None
         self.last_login_time = None
 
+        self._init_redis()
+        self._init_scraper()
+        self._load_session_from_redis()
+
     # =========================
-    # تحميل الإعدادات
+    # Config
     # =========================
     def _load_config(self):
-        self.USERNAME = os.getenv("AGENT_USERNAME", "twd_bot@agent.nsp")
-        self.PASSWORD = os.getenv("AGENT_PASSWORD", "Twd@@123")
-        self.PARENT_ID = os.getenv("PARENT_ID", "2470819")
+        self.USERNAME = os.getenv("AGENT_USERNAME")
+        self.PASSWORD = os.getenv("AGENT_PASSWORD")
+        self.PARENT_ID = os.getenv("PARENT_ID")
 
         self.ORIGIN = os.getenv("ICHANCY_ORIGIN", "https://agents.ichancy.com")
 
@@ -53,16 +66,27 @@ class IChancyAPI:
         }
 
         self.USER_AGENT = (
-            "Mozilla/5.0 (Linux; Android 6.0.1; SM-G532F) "
+            "Mozilla/5.0 (Linux; Android 10) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/106.0.5249.126 Mobile Safari/537.36"
+            "Chrome/119.0 Mobile Safari/537.36"
         )
 
-        self.REFERER = self.ORIGIN + "/dashboard"
         self.REQUEST_TIMEOUT = 25
 
     # =========================
-    # إدارة Scraper
+    # Redis
+    # =========================
+    def _init_redis(self):
+        redis_url = os.getenv("REDIS_URL")
+        if not redis_url:
+            raise RuntimeError("REDIS_URL غير موجود")
+
+        self.redis = redis.from_url(redis_url, decode_responses=True)
+        self.redis.ping()
+        logger.info("✅ Redis connected")
+
+    # =========================
+    # Scraper
     # =========================
     def _init_scraper(self):
         if self.scraper:
@@ -72,393 +96,186 @@ class IChancyAPI:
             browser={"browser": "chrome", "platform": "windows", "mobile": False}
         )
 
-        # تحميل الكوكيز من الجلسة المحفوظة
-        if self.session_cookies:
-            self.scraper.cookies.update(self.session_cookies)
-
-    def _is_session_valid(self):
-        if not self.session_expiry or not self.last_login_time:
-            return False
-
-        now = datetime.now()
-
-        if now >= self.session_expiry:
-            return False
-
-        # حماية إضافية
-        if now - self.last_login_time >= timedelta(hours=2):
-            return False
-
-        return True
-
-    def _get_headers(self):
+    def _headers(self):
         return {
             "Content-Type": "application/json",
             "User-Agent": self.USER_AGENT,
             "Origin": self.ORIGIN,
-            "Referer": self.REFERER,
+            "Referer": self.ORIGIN + "/dashboard",
         }
 
-    def _check_captcha(self, response):
-        try:
-            text = response.text.lower()
-        except:
+    # =========================
+    # Session helpers
+    # =========================
+    def _is_session_valid(self):
+        if not self.session_expiry:
             return False
+        return datetime.utcnow() < self.session_expiry
 
-        if "captcha" in text or "cloudflare" in text:
-            self.logger.warning("⚠️ Cloudflare/Captcha detected")
-            return True
+    def _load_session_from_redis(self):
+        data = self.redis.get(REDIS_SESSION_KEY)
+        if not data:
+            return
 
-        return False
+        try:
+            session = json.loads(data)
+            self.session_cookies = session["cookies"]
+            self.session_expiry = datetime.fromisoformat(session["expiry"])
+            self.last_login_time = datetime.fromisoformat(session["last_login"])
+            self.scraper.cookies.update(self.session_cookies)
+            self.is_logged_in = self._is_session_valid()
+
+            if self.is_logged_in:
+                logger.info("♻️ Session loaded from Redis")
+
+        except Exception as e:
+            logger.error(f"❌ Failed loading session: {e}")
+
+    def _save_session_to_redis(self):
+        data = {
+            "cookies": self.session_cookies,
+            "expiry": self.session_expiry.isoformat(),
+            "last_login": self.last_login_time.isoformat(),
+        }
+        self.redis.set(REDIS_SESSION_KEY, json.dumps(data), ex=3600)
+        logger.info("💾 Session saved to Redis")
 
     def _invalidate_session(self):
         self.is_logged_in = False
         self.session_cookies = {}
         self.session_expiry = None
         self.last_login_time = None
+        self.redis.delete(REDIS_SESSION_KEY)
+        logger.warning("♻️ Session invalidated")
 
     # =========================
-    # حفظ الجلسة في ملف
-    # =========================
-    def _save_session_to_file(self):
-        try:
-            if not self.session_cookies:
-                return
-
-            data = {
-                "cookies": self.session_cookies,
-                "expiry": self.session_expiry.isoformat(),
-                "last_login": self.last_login_time.isoformat(),
-            }
-
-            with open(COOKIE_FILE, "w") as f:
-                json.dump(data, f)
-
-            self.logger.info("💾 Session saved to file")
-
-        except Exception as e:
-            self.logger.error(f"❌ Failed to save session: {e}")
-
-    # =========================
-    # Decorator — with_retry
-    # =========================
-    @staticmethod
-    def with_retry(func):
-        @wraps(func)
-        def wrapper(self, *args, **kwargs):
-            try:
-                self.ensure_login()
-
-                resp = func(self, *args, **kwargs)
-
-                # إذا API رجع 401/403 → إعادة تسجيل الدخول مرة واحدة
-                if isinstance(resp, tuple) and resp[0] in (401, 403):
-                    self.logger.warning("⚠️ Session invalid — retrying login")
-                    self._invalidate_session()
-                    self.ensure_login()
-                    resp = func(self, *args, **kwargs)
-
-                return resp
-
-            except Exception as e:
-                self.logger.error(f"❌ Error in {func.__name__}: {e}")
-                return 500, {"error": str(e)}
-
-        return wrapper
-
-    # =========================
-    # تسجيل الدخول
+    # Login (واحد فقط)
     # =========================
     def login(self):
-        self._init_scraper()
-
-        payload = {"username": self.USERNAME, "password": self.PASSWORD}
+        # Redis lock لمنع Login متزامن
+        if not self.redis.set(REDIS_LOCK_KEY, "1", nx=True, ex=60):
+            time.sleep(2)
+            self._load_session_from_redis()
+            if self.is_logged_in:
+                return True
 
         try:
+            payload = {
+                "username": self.USERNAME,
+                "password": self.PASSWORD,
+            }
+
             resp = self.scraper.post(
                 self.ORIGIN + self.ENDPOINTS["signin"],
                 json=payload,
-                headers=self._get_headers(),
+                headers=self._headers(),
                 timeout=self.REQUEST_TIMEOUT,
             )
 
             if resp.status_code != 200:
-                return False, {"error": f"HTTP {resp.status_code}"}
-
-            if self._check_captcha(resp):
-                return False, {"error": "captcha_detected"}
+                raise Exception(f"HTTP {resp.status_code}")
 
             data = resp.json()
+            if not data.get("result"):
+                raise Exception("Login failed")
 
-            if data.get("result"):
-                self.session_cookies = dict(self.scraper.cookies)
-                self.session_expiry = datetime.now() + timedelta(minutes=30)
-                self.last_login_time = datetime.now()
-                self.is_logged_in = True
+            self.session_cookies = dict(self.scraper.cookies)
+            self.session_expiry = datetime.utcnow() + timedelta(minutes=30)
+            self.last_login_time = datetime.utcnow()
+            self.is_logged_in = True
 
-                self._save_session_to_file()
+            self._save_session_to_redis()
+            logger.info("✅ Global login success")
+            return True
 
-                self.logger.info("✅ Login successful")
-                return True, data
+        finally:
+            self.redis.delete(REDIS_LOCK_KEY)
 
-            msg = data.get("notification", [{"content": "login_failed"}])[0]["content"]
-            return False, {"error": msg}
-
-        except Exception as e:
-            return False, {"error": str(e)}
-
-    # =========================
-    # ensure_login
-    # =========================
     def ensure_login(self):
-        self._init_scraper()
-
         if self.is_logged_in and self._is_session_valid():
             return True
 
-        success, data = self.login()
-        if not success:
-            raise Exception(data.get("error", "login_failed"))
+        self._load_session_from_redis()
+        if self.is_logged_in:
+            return True
 
-        return True
-
-    # =========================
-    # get_player_id
-    # =========================
-    @with_retry
-    def get_player_id(self, login):
-        self._init_scraper()
-
-        payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
-
-        resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS["statistics"],
-            json=payload,
-            headers=self._get_headers(),
-            timeout=self.REQUEST_TIMEOUT,
-        )
-
-        try:
-            data = resp.json()
-        except:
-            return None
-
-        records = data.get("result", {}).get("records", [])
-
-        for r in records:
-            if r.get("login") == login or r.get("username") == login:
-                return r.get("playerId")
-
-        return None
+        return self.login()
 
     # =========================
-    # check_player_exists
+    # Decorator
+    # =========================
+    def with_retry(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            self.ensure_login()
+            resp = func(self, *args, **kwargs)
+
+            if isinstance(resp, tuple) and resp[0] in (401, 403):
+                logger.warning("🔁 Re-login triggered")
+                self._invalidate_session()
+                self.login()
+                resp = func(self, *args, **kwargs)
+
+            return resp
+
+        return wrapper
+
+    # =========================
+    # API Methods
     # =========================
     @with_retry
-    def check_player_exists(self, login):
-        self._init_scraper()
-
-        payload = {"page": 1, "pageSize": 100, "filter": {"login": login}}
-
-        resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS["statistics"],
-            json=payload,
-            headers=self._get_headers(),
-            timeout=self.REQUEST_TIMEOUT,
-        )
-
-        try:
-            data = resp.json()
-        except:
-            return False
-
-        records = data.get("result", {}).get("records", [])
-
-        return any(
-            (r.get("login") == login) or (r.get("username") == login)
-            for r in records
-        )
-
-    # =========================
-    # create_player_with_credentials
-    # =========================
-    @with_retry
-    def create_player_with_credentials(self, login, password):
-        self._init_scraper()
-
-        email = f"{login}@agint.nsp"
-        suffix = 1
-
-        while self.check_email_exists(email):
-            email = f"{login}_{suffix}@agint.nsp"
-            suffix += 1
-
+    def create_player(self, login, password):
         payload = {
             "player": {
-                "email": email,
-                "password": password,
-                "parentId": self.PARENT_ID,
                 "login": login,
+                "password": password,
+                "email": f"{login}@agent.nsp",
+                "parentId": self.PARENT_ID,
             }
         }
 
-        resp = self.scraper.post(
+        r = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["create"],
             json=payload,
-            headers=self._get_headers(),
+            headers=self._headers(),
             timeout=self.REQUEST_TIMEOUT,
         )
 
-        try:
-            data = resp.json()
-        except:
-            data = {}
+        return r.status_code, r.json()
 
-        # الحصول على player_id
-        player_id = None
-        for _ in range(5):
-            player_id = self.get_player_id(login)
-            if player_id:
-                break
-            time.sleep(1)
-
-        return resp.status_code, data, player_id, email
-
-    # =========================
-    # check_email_exists
-    # =========================
     @with_retry
-    def check_email_exists(self, email):
-        self._init_scraper()
-
-        payload = {"page": 1, "pageSize": 100, "filter": {"email": email}}
-
-        resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS["statistics"],
-            json=payload,
-            headers=self._get_headers(),
-            timeout=self.REQUEST_TIMEOUT,
-        )
-
-        try:
-            data = resp.json()
-        except:
-            return False
-
-        records = data.get("result", {}).get("records", [])
-        return any(r.get("email") == email for r in records)
-
-    # =========================
-    # deposit
-    # =========================
-    @with_retry
-    def deposit_to_player(self, player_id, amount):
-        self._init_scraper()
-
+    def deposit(self, player_id, amount):
         payload = {
-            "amount": amount,
-            "comment": "Deposit from API",
             "playerId": player_id,
-            "currencyCode": "NSP",
+            "amount": amount,
             "currency": "NSP",
             "moneyStatus": 5,
         }
 
-        resp = self.scraper.post(
+        r = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["deposit"],
             json=payload,
-            headers=self._get_headers(),
+            headers=self._headers(),
             timeout=self.REQUEST_TIMEOUT,
         )
 
-        try:
-            data = resp.json()
-        except:
-            data = {}
+        return r.status_code, r.json()
 
-        return resp.status_code, data
-
-    # =========================
-    # withdraw
-    # =========================
     @with_retry
-    def withdraw_from_player(self, player_id, amount):
-        self._init_scraper()
-
+    def withdraw(self, player_id, amount):
         payload = {
-            "amount": amount,
-            "comment": "Withdrawal from API",
             "playerId": player_id,
-            "currencyCode": "NSP",
+            "amount": amount,
             "currency": "NSP",
             "moneyStatus": 5,
         }
 
-        resp = self.scraper.post(
+        r = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["withdraw"],
             json=payload,
-            headers=self._get_headers(),
+            headers=self._headers(),
             timeout=self.REQUEST_TIMEOUT,
         )
 
-        try:
-            data = resp.json()
-        except:
-            data = {}
+        return r.status_code, r.json()
 
-        return resp.status_code, data
-
-    # =========================
-    # get_player_balance
-    # =========================
-    @with_retry
-    def get_player_balance(self, player_id):
-        self._init_scraper()
-
-        payload = {"playerId": str(player_id)}
-
-        resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS["balance"],
-            json=payload,
-            headers=self._get_headers(),
-            timeout=self.REQUEST_TIMEOUT,
-        )
-
-        try:
-            data = resp.json()
-        except:
-            return resp.status_code, {}, 0.0
-
-        results = data.get("result", [])
-        balance = 0.0
-
-        if isinstance(results, list) and results:
-            try:
-                balance = float(results[0].get("balance", 0))
-            except:
-                balance = 0.0
-
-        return resp.status_code, data, balance
-
-    # =========================
-    # get_all_players
-    # =========================
-    @with_retry
-    def get_all_players(self):
-        self._init_scraper()
-
-        payload = {"page": 1, "pageSize": 100, "filter": {}}
-
-        resp = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS["statistics"],
-            json=payload,
-            headers=self._get_headers(),
-            timeout=self.REQUEST_TIMEOUT,
-        )
-
-        try:
-            data = resp.json()
-        except:
-            return []
-
-        return data.get("result", {}).get("records", [])
