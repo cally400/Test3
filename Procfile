@@ -1,1 +1,2 @@
-worker: python main.py
+web: gunicorn webhook_app:app
+
