@@ -1,4 +1,4 @@
-# ichancy_api.py
+# ichancy_api.py - الإصدار المحسّن
 import cloudscraper
 import os
 import logging
@@ -125,7 +125,7 @@ class IChancyAPI:
             "Content-Type": "application/json",
             "User-Agent": self.USER_AGENT,
             "Origin": self.ORIGIN,
-            "Referer": f"{self.ORIGIN}/login",  # ⚠️ تم التغيير إلى /login
+            "Referer": f"{self.ORIGIN}/login",
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
         }
@@ -262,7 +262,7 @@ class IChancyAPI:
         return self.login()
 
     # =========================
-    # Decorator for API calls
+    # Decorator for API calls (IMPROVED VERSION)
     # =========================
     def with_retry(func):
         @wraps(func)
@@ -271,15 +271,21 @@ class IChancyAPI:
             if not self.ensure_login():
                 return (401, {"error": "فشل تسجيل الدخول"})
             
-            # ✅ تنفيذ الطلب
+            # ✅ التنفيذ الأول للطلب
             resp = func(self, *args, **kwargs)
             
-            # ✅ إعادة المحاولة إذا كان الخطأ 401 أو 403
+            # ✅ إعادة المحاولة ONLY إذا كان الخطأ 401 أو 403
             if isinstance(resp, tuple) and resp[0] in (401, 403):
-                logger.warning(f"⚠️ تم رفض الطلب برمز {resp[0]}، جاري إعادة تسجيل الدخول...")
+                # ⚠️ تسجيل تفاصيل الخطأ قبل إعادة المحاولة
+                func_name = func.__name__
+                logger.warning(f"⚠️ [{func_name}] تم رفض الطلب برمز {resp[0]}، جاري إعادة تسجيل الدخول...")
+                if len(resp) > 1 and isinstance(resp[1], dict):
+                    logger.warning(f"📄 [{func_name}] محتوى استجابة الخطأ: {resp[1]}")
+                
                 self._invalidate_session()
                 
                 if self.login():
+                    # إعادة التنفيذ بعد تسجيل الدخول الجديد
                     resp = func(self, *args, **kwargs)
                 else:
                     return (401, {"error": "فشل إعادة تسجيل الدخول"})
@@ -321,6 +327,8 @@ class IChancyAPI:
     @with_retry
     def check_player_exists(self, login):
         payload = {"login": login}
+        
+        # ✅ أضف هذا السطر لتتبع بداية الطلب
         logger.info(f"🔍 [check_player_exists] التحقق من وجود اللاعب: {login}")
         
         r = self.scraper.post(
@@ -330,12 +338,27 @@ class IChancyAPI:
             timeout=self.REQUEST_TIMEOUT,
         )
         
+        # ✅ تسجيل تفصيلي للاستجابة بغض النظر عن النتيجة
+        logger.info(f"📡 [check_player_exists] استجابة HTTP: {r.status_code}")
+        
+        # ✅ تسجيل محتوى الاستجابة فقط في حالة الخطأ
         if r.status_code != 200:
-            logger.error(f"❌ خطأ في التحقق من اللاعب: HTTP {r.status_code}")
-            raise Exception(f"HTTP {r.status_code} عند التحقق من اسم المستخدم")
+            logger.warning(f"⚠️ [check_player_exists] محتوى الاستجابة (غير 200): {r.text[:300]}")
+            
+            # ⚠️ المعالجة الخاصة: إذا كان الخطأ 403
+            if r.status_code == 403:
+                logger.error("❌ [check_player_exists] رفض الوصول (403) للتحقق من اللاعب. قد يكون Endpoint خاطئ أو يحتاج صلاحية خاصة.")
+                # نُعيد False هنا حتى لا يوقف البوت العملية
+                return False
+            else:
+                # للأخطاء الأخرى غير 403، نرفع الاستثناء كما كان
+                logger.error(f"❌ خطأ في التحقق من اللاعب: HTTP {r.status_code}")
+                raise Exception(f"HTTP {r.status_code} عند التحقق من اسم المستخدم")
         
         data = r.json()
-        return data.get("result", {}).get("exists", False)
+        exists = data.get("result", {}).get("exists", False)
+        logger.info(f"ℹ️ [check_player_exists] نتيجة التحقق: اللاعب '{login}' موجود = {exists}")
+        return exists
 
     @with_retry
     def deposit(self, player_id, amount):
