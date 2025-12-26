@@ -14,7 +14,7 @@ if not WEBHOOK_URL:
     raise RuntimeError("❌ WEBHOOK_URL غير موجود")
 
 # =========================
-# إعداد Webhook مرة واحدة فقط
+# إعداد Webhook مرة واحدة
 # =========================
 def setup_webhook():
     url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
@@ -22,17 +22,15 @@ def setup_webhook():
     bot.set_webhook(url)
     print(f"✅ Webhook set to: {url}")
 
-# يتم تنفيذها مرة واحدة عند تحميل الملف
 setup_webhook()
 
 # =========================
-# استقبال تحديثات تيليغرام
+# استقبال التحديثات
 # =========================
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
-    json_data = request.get_json(force=True)
-    update = bot.types.Update.de_json(json_data)
-    bot.process_new_updates([update])
+    data = request.get_json(force=True)
+    bot.process_new_updates([bot.types.Update.de_json(data)])
     return "OK", 200
 
 # =========================
