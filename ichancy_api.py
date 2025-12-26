@@ -1,4 +1,3 @@
-# ichancy_api.py - الإصدار المحسّن
 import cloudscraper
 import os
 import logging
@@ -67,7 +66,6 @@ class IChancyAPI:
         self.ENDPOINTS = {
             "signin": "/global/api/User/signIn",
             "create": "/global/api/Player/registerPlayer",
-            "check_player": "/global/api/Player/checkPlayerExist",
             "statistics": "/global/api/Statistics/getPlayersStatisticsPro",
             "deposit": "/global/api/Player/depositToPlayer",
             "withdraw": "/global/api/Player/withdrawFromPlayer",
@@ -325,38 +323,37 @@ class IChancyAPI:
         return r.status_code, r.json()
 
     @with_retry
-def check_player_exists(self, login: str) -> bool:
-    """التحقق من وجود لاعب (الطريقة الأصلية التي تعمل)"""
-    payload = {
-        "page": 1,
-        "pageSize": 100,
-        "filter": {"login": login}
-    }
+    def check_player_exists(self, login: str) -> bool:
+        """التحقق من وجود لاعب (الطريقة الأصلية التي تعمل)"""
+        payload = {
+            "page": 1,
+            "pageSize": 100,
+            "filter": {"login": login}
+        }
 
-    resp = self.scraper.post(
-        self.ORIGIN + self.ENDPOINTS["statistics"],  # ⚠️ استخدم statistics بدلاً من check_player
-        json=payload,
-        headers=self._headers(),
-        timeout=self.REQUEST_TIMEOUT,
-    )
-    
-    # ✅ تسجيل الاستجابة للتأكد
-    logger.info(f"📡 [check_player_exists] استجابة HTTP: {resp.status_code}")
-    
-    if resp.status_code != 200:
-        logger.warning(f"⚠️ [check_player_exists] محتوى الاستجابة (غير 200): {resp.text[:300]}")
-        return False  # إذا فشل الطلب، افترض أن اللاعب غير موجود
-    
-    try:
-        data = resp.json()
-        records = data.get("result", {}).get("records", [])
-        exists = any(record.get("username") == login for record in records)
-        logger.info(f"ℹ️ [check_player_exists] نتيجة التحقق: اللاعب '{login}' موجود = {exists}")
-        return exists
-    except Exception as e:
-        logger.error(f"❌ خطأ في تحليل استجابة التحقق: {e}")
-        return False
-
+        resp = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS["statistics"],  # ⚠️ استخدم statistics بدلاً من check_player
+            json=payload,
+            headers=self._headers(),
+            timeout=self.REQUEST_TIMEOUT,
+        )
+        
+        # ✅ تسجيل الاستجابة للتأكد
+        logger.info(f"📡 [check_player_exists] استجابة HTTP: {resp.status_code}")
+        
+        if resp.status_code != 200:
+            logger.warning(f"⚠️ [check_player_exists] محتوى الاستجابة (غير 200): {resp.text[:300]}")
+            return False  # إذا فشل الطلب، افترض أن اللاعب غير موجود
+        
+        try:
+            data = resp.json()
+            records = data.get("result", {}).get("records", [])
+            exists = any(record.get("username") == login for record in records)
+            logger.info(f"ℹ️ [check_player_exists] نتيجة التحقق: اللاعب '{login}' موجود = {exists}")
+            return exists
+        except Exception as e:
+            logger.error(f"❌ خطأ في تحليل استجابة التحقق: {e}")
+            return False
 
     @with_retry
     def deposit(self, player_id, amount):
