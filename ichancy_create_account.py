@@ -1,3 +1,5 @@
+# ichancy_create_account.py
+
 import random
 import string
 import db
@@ -43,19 +45,29 @@ def start_create_account(bot, call):
 
 
 def process_username_step(bot, message, telegram_id):
+    print("DEBUG: process_username_step called")
+    print("DEBUG: message.text =", message.text)
+
     if not message.text:
         bot.send_message(message.chat.id, "❌ الرجاء إرسال نص فقط")
         return start_create_account(bot, message)
 
     raw_username = message.text.strip()
     raw_username = ''.join(c for c in raw_username if c.isalnum() or c in ['_', '-'])
+    print("DEBUG: cleaned username =", raw_username)
 
     if len(raw_username) < 3:
         bot.send_message(message.chat.id, "❌ الاسم قصير جداً، يجب أن يكون 3 أحرف على الأقل")
         return
 
+    # شريط تقدم وهمي
+    sent_msg = bot.send_message(message.chat.id, "⏳ جاري التحقق من الاسم: 0%")
+    for progress in range(10, 101, 10):
+        bot.edit_message_text(f"⏳ جاري التحقق من الاسم: {progress}%", message.chat.id, sent_msg.message_id)
+
     try:
         username = generate_username(raw_username)
+        print("DEBUG: generated username =", username)
 
         bot.send_message(
             message.chat.id,
@@ -74,10 +86,8 @@ def process_username_step(bot, message, telegram_id):
         )
 
     except Exception as e:
-        bot.send_message(
-            message.chat.id,
-            f"❌ خطأ: {str(e)}\n\nيرجى المحاولة مرة أخرى باستخدام /start"
-        )
+        print("ERROR:", e)
+        bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}\nيرجى المحاولة مرة أخرى باستخدام /start")
 
 
 def process_password_step(bot, message, telegram_id, username):
@@ -146,6 +156,7 @@ https://www.ichancy.com/login
         bot.send_message(message.chat.id, login_info, parse_mode="Markdown")
 
     except Exception as e:
+        print("ERROR:", e)
         bot.send_message(
             message.chat.id,
             f"❌ **فشل إنشاء الحساب:**\n\n{str(e)}\n\n"
