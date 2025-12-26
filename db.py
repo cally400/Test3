@@ -1,5 +1,4 @@
 from pymongo import MongoClient
-from pymongo.errors import OperationFailure
 from datetime import datetime
 import os
 
@@ -9,28 +8,35 @@ import os
 
 MONGODB_URI = os.getenv("MONGODB_URI")
 
-if not MONGODB_URI:
-    print("⚠️ WARNING: MONGODB_URI غير موجود - سيتم تعطيل قاعدة البيانات")
-    client = None
-    db = None
+client = None
+db = None
+users = None
+transactions = None
+referrals = None
+
+if MONGODB_URI:
+    try:
+        client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+        db = client.get_database("ichancy_bot")
+
+        # ✅ الطريقة الصحيحة
+        users = db["users"]
+        transactions = db["transactions"]
+        referrals = db["referrals"]
+
+        print("✅ MongoDB connected successfully")
+
+    except Exception as e:
+        print("❌ MongoDB connection error:", e)
 else:
-    client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-    db = client.get_database("ichancy_bot")
+    print("⚠️ MONGODB_URI غير موجود")
 
 # ============================
-# المجموعات
-# ============================
-
-users = db.users if db else None
-transactions = db.transactions if db else None
-referrals = db.referrals if db else None
-
-# ============================
-# إنشاء الفهارس (آمن)
+# إنشاء الفهارس
 # ============================
 
 def ensure_indexes():
-    if not db:
+    if db is None:
         return
 
     try:
@@ -51,10 +57,7 @@ ensure_indexes()
 # ============================
 
 def _db_check():
-    if not db:
-        print("⚠️ Database not available")
-        return False
-    return True
+    return db is not None
 
 # ============================
 # المستخدمين
@@ -108,14 +111,6 @@ def update_user(telegram_id, update_data):
     return users.update_one({"telegram_id": telegram_id}, {"$set": update_data})
 
 
-def accept_terms(telegram_id):
-    return update_user(telegram_id, {"accepted_terms": True})
-
-
-def mark_channel_joined(telegram_id):
-    return update_user(telegram_id, {"joined_channel": True})
-
-
 def update_player_info(telegram_id, player_id, player_username, player_email, player_password):
     return update_user(
         telegram_id,
@@ -127,9 +122,6 @@ def update_player_info(telegram_id, player_id, player_username, player_email, pl
         },
     )
 
-# ============================
-# المعاملات
-# ============================
 
 def log_transaction(telegram_id, player_id, amount, ttype, status="pending"):
     if not _db_check():
