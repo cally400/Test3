@@ -325,40 +325,38 @@ class IChancyAPI:
         return r.status_code, r.json()
 
     @with_retry
-    def check_player_exists(self, login):
-        payload = {"login": login}
-        
-        # ✅ أضف هذا السطر لتتبع بداية الطلب
-        logger.info(f"🔍 [check_player_exists] التحقق من وجود اللاعب: {login}")
-        
-        r = self.scraper.post(
-            self.ORIGIN + self.ENDPOINTS["check_player"],
-            json=payload,
-            headers=self._headers(),
-            timeout=self.REQUEST_TIMEOUT,
-        )
-        
-        # ✅ تسجيل تفصيلي للاستجابة بغض النظر عن النتيجة
-        logger.info(f"📡 [check_player_exists] استجابة HTTP: {r.status_code}")
-        
-        # ✅ تسجيل محتوى الاستجابة فقط في حالة الخطأ
-        if r.status_code != 200:
-            logger.warning(f"⚠️ [check_player_exists] محتوى الاستجابة (غير 200): {r.text[:300]}")
-            
-            # ⚠️ المعالجة الخاصة: إذا كان الخطأ 403
-            if r.status_code == 403:
-                logger.error("❌ [check_player_exists] رفض الوصول (403) للتحقق من اللاعب. قد يكون Endpoint خاطئ أو يحتاج صلاحية خاصة.")
-                # نُعيد False هنا حتى لا يوقف البوت العملية
-                return False
-            else:
-                # للأخطاء الأخرى غير 403، نرفع الاستثناء كما كان
-                logger.error(f"❌ خطأ في التحقق من اللاعب: HTTP {r.status_code}")
-                raise Exception(f"HTTP {r.status_code} عند التحقق من اسم المستخدم")
-        
-        data = r.json()
-        exists = data.get("result", {}).get("exists", False)
+def check_player_exists(self, login: str) -> bool:
+    """التحقق من وجود لاعب (الطريقة الأصلية التي تعمل)"""
+    payload = {
+        "page": 1,
+        "pageSize": 100,
+        "filter": {"login": login}
+    }
+
+    resp = self.scraper.post(
+        self.ORIGIN + self.ENDPOINTS["statistics"],  # ⚠️ استخدم statistics بدلاً من check_player
+        json=payload,
+        headers=self._headers(),
+        timeout=self.REQUEST_TIMEOUT,
+    )
+    
+    # ✅ تسجيل الاستجابة للتأكد
+    logger.info(f"📡 [check_player_exists] استجابة HTTP: {resp.status_code}")
+    
+    if resp.status_code != 200:
+        logger.warning(f"⚠️ [check_player_exists] محتوى الاستجابة (غير 200): {resp.text[:300]}")
+        return False  # إذا فشل الطلب، افترض أن اللاعب غير موجود
+    
+    try:
+        data = resp.json()
+        records = data.get("result", {}).get("records", [])
+        exists = any(record.get("username") == login for record in records)
         logger.info(f"ℹ️ [check_player_exists] نتيجة التحقق: اللاعب '{login}' موجود = {exists}")
         return exists
+    except Exception as e:
+        logger.error(f"❌ خطأ في تحليل استجابة التحقق: {e}")
+        return False
+
 
     @with_retry
     def deposit(self, player_id, amount):
