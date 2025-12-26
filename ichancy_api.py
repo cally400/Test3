@@ -18,31 +18,37 @@ logging.basicConfig(
 logger = logging.getLogger("IChancyAPI")
 
 # =========================
-# Redis key (جلسة واحدة فقط)
+# Global API Instance
 # =========================
-REDIS_SESSION_KEY = "ichancy:global_session"
-REDIS_LOCK_KEY = "ichancy:login_lock"
+_global_api_instance = None
 
+def get_api_instance():
+    """
+    إرجاع نسخة واحدة مشتركة من IChancyAPI لجميع الطلبات
+    """
+    global _global_api_instance
+    if _global_api_instance is None:
+        _global_api_instance = IChancyAPI()
+    return _global_api_instance
 
 class IChancyAPI:
     """
-    🔐 Global Agent Session
-    - Session واحدة لكل المستخدمين
-    - Redis للتخزين
-    - Auto re-login
+    🔐 Global Agent Session - إدارة الجلسة المركزية
     """
 
     def __init__(self):
         self._load_config()
-
         self.scraper = None
         self.redis = None
-
         self.is_logged_in = False
         self.session_cookies = {}
         self.session_expiry = None
         self.last_login_time = None
-
+        
+        # Redis keys
+        self.REDIS_SESSION_KEY = "ichancy:global_session"
+        self.REDIS_LOCK_KEY = "ichancy:login_lock"
+        
         self._init_redis()
         self._init_scraper()
         self._load_session_from_redis()
@@ -54,9 +60,10 @@ class IChancyAPI:
         self.USERNAME = os.getenv("AGENT_USERNAME")
         self.PASSWORD = os.getenv("AGENT_PASSWORD")
         self.PARENT_ID = os.getenv("PARENT_ID")
-
+        
+        # ⚠️ تأكد من أن هذه القيمة صحيحة
         self.ORIGIN = os.getenv("ICHANCY_ORIGIN", "https://agents.ichancy.com")
-
+        
         self.ENDPOINTS = {
             "signin": "/global/api/User/signIn",
             "create": "/global/api/Player/registerPlayer",
@@ -66,14 +73,19 @@ class IChancyAPI:
             "withdraw": "/global/api/Player/withdrawFromPlayer",
             "balance": "/global/api/Player/getPlayerBalanceById",
         }
-
+        
         self.USER_AGENT = (
             "Mozilla/5.0 (Linux; Android 10) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/119.0 Mobile Safari/537.36"
         )
-
+        
         self.REQUEST_TIMEOUT = 25
+        
+        # ✅ التحقق من وجود المتغيرات البيئية
+        if not all([self.USERNAME, self.PASSWORD, self.PARENT_ID]):
+            logger.error("❌ متغيرات البيئة AGENT_USERNAME أو AGENT_PASSWORD أو PARENT_ID غير موجودة")
+            raise RuntimeError("متغيرات البيئة المطلوبة غير موجودة")
 
     # =========================
     # Redis
@@ -81,11 +93,16 @@ class IChancyAPI:
     def _init_redis(self):
         redis_url = os.getenv("REDIS_URL")
         if not redis_url:
+            logger.error("❌ REDIS_URL غير موجود في متغيرات البيئة")
             raise RuntimeError("REDIS_URL غير موجود")
-
-        self.redis = redis.from_url(redis_url, decode_responses=True)
-        self.redis.ping()
-        logger.info("✅ Redis connected")
+        
+        try:
+            self.redis = redis.from_url(redis_url, decode_responses=True)
+            self.redis.ping()
+            logger.info("✅ Redis connected successfully")
+        except Exception as e:
+            logger.error(f"❌ فشل الاتصال بـ Redis: {e}")
+            raise
 
     # =========================
     # Scraper
@@ -93,21 +110,28 @@ class IChancyAPI:
     def _init_scraper(self):
         if self.scraper:
             return
-
-        self.scraper = cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "mobile": False}
-        )
+        
+        try:
+            self.scraper = cloudscraper.create_scraper(
+                browser={"browser": "chrome", "platform": "windows", "mobile": False}
+            )
+            logger.info("✅ CloudScraper initialized")
+        except Exception as e:
+            logger.error(f"❌ فشل تهيئة CloudScraper: {e}")
+            raise
 
     def _headers(self):
         return {
             "Content-Type": "application/json",
             "User-Agent": self.USER_AGENT,
             "Origin": self.ORIGIN,
-            "Referer": self.ORIGIN + "/dashboard",
+            "Referer": f"{self.ORIGIN}/login",  # ⚠️ تم التغيير إلى /login
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
         }
 
     # =========================
-    # Session helpers
+    # Session Management
     # =========================
     def _is_session_valid(self):
         if not self.session_expiry:
@@ -115,111 +139,152 @@ class IChancyAPI:
         return datetime.utcnow() < self.session_expiry
 
     def _load_session_from_redis(self):
-        data = self.redis.get(REDIS_SESSION_KEY)
-        if not data:
-            return
-
         try:
+            data = self.redis.get(self.REDIS_SESSION_KEY)
+            if not data:
+                logger.info("ℹ️ لا توجد جلسة مخزنة في Redis")
+                return
+            
             session = json.loads(data)
             self.session_cookies = session["cookies"]
             self.session_expiry = datetime.fromisoformat(session["expiry"])
             self.last_login_time = datetime.fromisoformat(session["last_login"])
             self.scraper.cookies.update(self.session_cookies)
             self.is_logged_in = self._is_session_valid()
-
+            
             if self.is_logged_in:
-                logger.info("♻️ Session loaded from Redis")
-
+                logger.info("✅ تم تحميل الجلسة من Redis")
+            else:
+                logger.info("ℹ️ الجلسة المخزنة منتهية الصلاحية")
+                
         except Exception as e:
-            logger.error(f"❌ Failed loading session: {e}")
+            logger.error(f"❌ فشل تحميل الجلسة من Redis: {e}")
 
     def _save_session_to_redis(self):
-        data = {
-            "cookies": self.session_cookies,
-            "expiry": self.session_expiry.isoformat(),
-            "last_login": self.last_login_time.isoformat(),
-        }
-        self.redis.set(REDIS_SESSION_KEY, json.dumps(data), ex=3600)
-        logger.info("💾 Session saved to Redis")
+        try:
+            data = {
+                "cookies": self.session_cookies,
+                "expiry": self.session_expiry.isoformat(),
+                "last_login": self.last_login_time.isoformat(),
+            }
+            self.redis.set(self.REDIS_SESSION_KEY, json.dumps(data), ex=3600)
+            logger.info("💾 تم حفظ الجلسة في Redis")
+        except Exception as e:
+            logger.error(f"❌ فشل حفظ الجلسة في Redis: {e}")
 
     def _invalidate_session(self):
         self.is_logged_in = False
         self.session_cookies = {}
         self.session_expiry = None
         self.last_login_time = None
-        self.redis.delete(REDIS_SESSION_KEY)
-        logger.warning("♻️ Session invalidated")
+        try:
+            self.redis.delete(self.REDIS_SESSION_KEY)
+            logger.warning("♻️ تم إبطال الجلسة وحذفها من Redis")
+        except:
+            pass
 
     # =========================
-    # Login (واحد فقط)
+    # Login
     # =========================
     def login(self):
-        # Redis lock لمنع Login متزامن
-        if not self.redis.set(REDIS_LOCK_KEY, "1", nx=True, ex=60):
-            time.sleep(2)
+        # 🔒 منع تسجيلات الدخول المتزامنة
+        if not self.redis.set(self.REDIS_LOCK_KEY, "1", nx=True, ex=60):
+            logger.info("⏳ جاري انتظار عملية تسجيل دخول أخرى...")
+            time.sleep(3)
             self._load_session_from_redis()
             if self.is_logged_in:
                 return True
-
+        
         try:
+            logger.info(f"🚀 محاولة تسجيل الدخول إلى {self.ORIGIN}")
+            
             payload = {
                 "username": self.USERNAME,
                 "password": self.PASSWORD,
             }
-
+            
             resp = self.scraper.post(
                 self.ORIGIN + self.ENDPOINTS["signin"],
                 json=payload,
                 headers=self._headers(),
                 timeout=self.REQUEST_TIMEOUT,
             )
-
+            
+            logger.info(f"📡 استجابة تسجيل الدخول: {resp.status_code}")
+            
+            # ✅ طباعة الاستجابة الكاملة لأغراض التصحيح
             if resp.status_code != 200:
-                raise Exception(f"HTTP {resp.status_code}")
-
+                logger.error(f"❌ فشل تسجيل الدخول: HTTP {resp.status_code}")
+                logger.error(f"📄 محتوى الاستجابة: {resp.text[:500]}")
+                return False
+            
             data = resp.json()
+            logger.info(f"📊 بيانات استجابة API: {json.dumps(data, indent=2)[:500]}")
+            
             if not data.get("result"):
-                raise Exception("Login failed")
-
+                logger.error(f"❌ فشل تسجيل الدخول: {data.get('message', 'لا توجد رسالة')}")
+                return False
+            
+            # ✅ حفظ بيانات الجلسة
             self.session_cookies = dict(self.scraper.cookies)
             self.session_expiry = datetime.utcnow() + timedelta(minutes=30)
             self.last_login_time = datetime.utcnow()
             self.is_logged_in = True
-
+            
+            # ✅ حفظ الجلسة في Redis
             self._save_session_to_redis()
-            logger.info("✅ Global login success")
+            
+            logger.info("✅ تم تسجيل الدخول بنجاح")
             return True
-
+            
+        except Exception as e:
+            logger.error(f"❌ استثناء أثناء تسجيل الدخول: {e}")
+            return False
         finally:
-            self.redis.delete(REDIS_LOCK_KEY)
+            # 🔓 تحرير القفل
+            try:
+                self.redis.delete(self.REDIS_LOCK_KEY)
+            except:
+                pass
 
     def ensure_login(self):
         if self.is_logged_in and self._is_session_valid():
+            logger.info("✅ الجلسة نشطة بالفعل")
             return True
-
+        
         self._load_session_from_redis()
-        if self.is_logged_in:
+        
+        if self.is_logged_in and self._is_session_valid():
+            logger.info("✅ تم استعادة الجلسة من Redis")
             return True
-
+        
+        logger.info("🔑 الجلسة غير نشطة، جاري تسجيل الدخول...")
         return self.login()
 
     # =========================
-    # Decorator
+    # Decorator for API calls
     # =========================
     def with_retry(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            self.ensure_login()
+            # ✅ محاولة تسجيل الدخول أولاً
+            if not self.ensure_login():
+                return (401, {"error": "فشل تسجيل الدخول"})
+            
+            # ✅ تنفيذ الطلب
             resp = func(self, *args, **kwargs)
-
+            
+            # ✅ إعادة المحاولة إذا كان الخطأ 401 أو 403
             if isinstance(resp, tuple) and resp[0] in (401, 403):
-                logger.warning("🔁 Re-login triggered")
+                logger.warning(f"⚠️ تم رفض الطلب برمز {resp[0]}، جاري إعادة تسجيل الدخول...")
                 self._invalidate_session()
-                self.login()
-                resp = func(self, *args, **kwargs)
-
+                
+                if self.login():
+                    resp = func(self, *args, **kwargs)
+                else:
+                    return (401, {"error": "فشل إعادة تسجيل الدخول"})
+            
             return resp
-
         return wrapper
 
     # =========================
@@ -235,31 +300,39 @@ class IChancyAPI:
                 "parentId": self.PARENT_ID,
             }
         }
-
+        
+        logger.info(f"👤 محاولة إنشاء لاعب: {login}")
+        
         r = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["create"],
             json=payload,
             headers=self._headers(),
             timeout=self.REQUEST_TIMEOUT,
         )
-
+        
+        logger.info(f"📡 استجابة إنشاء اللاعب: {r.status_code}")
+        
+        if r.status_code in (401, 403):
+            logger.error(f"❌ رفض الوصول: {r.status_code}")
+            logger.error(f"📄 محتوى الاستجابة: {r.text[:500]}")
+        
         return r.status_code, r.json()
 
     @with_retry
     def check_player_exists(self, login):
-        """
-        تحقق مما إذا كان اسم المستخدم موجود مسبقًا
-        """
         payload = {"login": login}
+        
         r = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["check_player"],
             json=payload,
             headers=self._headers(),
             timeout=self.REQUEST_TIMEOUT,
         )
+        
         if r.status_code != 200:
+            logger.error(f"❌ خطأ في التحقق من اللاعب: HTTP {r.status_code}")
             raise Exception(f"HTTP {r.status_code} عند التحقق من اسم المستخدم")
-
+        
         data = r.json()
         return data.get("result", {}).get("exists", False)
 
@@ -271,14 +344,18 @@ class IChancyAPI:
             "currency": "NSP",
             "moneyStatus": 5,
         }
-
+        
+        logger.info(f"💰 محاولة إيداع: {amount} NSP للاعب {player_id}")
+        
         r = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["deposit"],
             json=payload,
             headers=self._headers(),
             timeout=self.REQUEST_TIMEOUT,
         )
-
+        
+        logger.info(f"📡 استجابة الإيداع: {r.status_code}")
+        
         return r.status_code, r.json()
 
     @with_retry
@@ -289,13 +366,16 @@ class IChancyAPI:
             "currency": "NSP",
             "moneyStatus": 5,
         }
-
+        
+        logger.info(f"💸 محاولة سحب: {amount} NSP من اللاعب {player_id}")
+        
         r = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["withdraw"],
             json=payload,
             headers=self._headers(),
             timeout=self.REQUEST_TIMEOUT,
         )
-
+        
+        logger.info(f"📡 استجابة السحب: {r.status_code}")
+        
         return r.status_code, r.json()
-
