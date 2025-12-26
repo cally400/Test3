@@ -321,6 +321,7 @@ class IChancyAPI:
     @with_retry
     def check_player_exists(self, login):
         payload = {"login": login}
+        logger.info(f"🔍 [check_player_exists] التحقق من وجود اللاعب: {login}")
         
         r = self.scraper.post(
             self.ORIGIN + self.ENDPOINTS["check_player"],
