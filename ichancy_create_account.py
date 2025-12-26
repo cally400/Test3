@@ -1,38 +1,50 @@
+
 # ichancy_create_account.py
 
 import random
 import string
+import logging
 import db
-from session_manager import ensure_session
+from ichancy_api import IChancyAPI
 
+# =========================
+# Logging
+# =========================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger("CreateAccount")
 
+api = IChancyAPI()
+
+# =========================
+# Helpers
+# =========================
 def _random_suffix(length=3):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
 def generate_username(raw_username: str) -> str:
     """إنشاء اسم مستخدم فريد"""
-    api = ensure_session()
-
-    # تنظيف الاسم قبل البناء
     raw_username = ''.join(c for c in raw_username if c.isalnum() or c in ['_', '-'])
     base = f"ZEUS_{raw_username}"
 
     for i in range(6):
         username = base if i == 0 else f"{base}_{_random_suffix()}"
-
         try:
-            exists = api.check_player_exists(username)
+            exists = api.ensure_login() and api.create_player(login=username, password="Temp1234")[0] == 409
         except Exception:
-            # حماية إضافية: لو API فشل → نعيد المحاولة
             continue
-
         if not exists:
             return username
 
     raise ValueError("❌ اسم المستخدم غير متاح، جرّب اسمًا آخر")
 
 
+# =========================
+# Bot steps
+# =========================
 def start_create_account(bot, call):
     bot.send_message(
         call.message.chat.id,
@@ -45,30 +57,20 @@ def start_create_account(bot, call):
 
 
 def process_username_step(bot, message, telegram_id):
-    print("DEBUG: process_username_step called")
-    print("DEBUG: message.text =", message.text)
-
+    logger.info("DEBUG: process_username_step called")
     if not message.text:
         bot.send_message(message.chat.id, "❌ الرجاء إرسال نص فقط")
         return start_create_account(bot, message)
 
-    raw_username = message.text.strip()
-    raw_username = ''.join(c for c in raw_username if c.isalnum() or c in ['_', '-'])
-    print("DEBUG: cleaned username =", raw_username)
+    raw_username = ''.join(c for c in message.text.strip() if c.isalnum() or c in ['_', '-'])
+    logger.info(f"DEBUG: cleaned username = {raw_username}")
 
     if len(raw_username) < 3:
         bot.send_message(message.chat.id, "❌ الاسم قصير جداً، يجب أن يكون 3 أحرف على الأقل")
         return
 
-    # شريط تقدم وهمي
-    sent_msg = bot.send_message(message.chat.id, "⏳ جاري التحقق من الاسم: 0%")
-    for progress in range(10, 101, 10):
-        bot.edit_message_text(f"⏳ جاري التحقق من الاسم: {progress}%", message.chat.id, sent_msg.message_id)
-
     try:
         username = generate_username(raw_username)
-        print("DEBUG: generated username =", username)
-
         bot.send_message(
             message.chat.id,
             f"✅ الاسم متاح: `{username}`\n\n"
@@ -79,15 +81,17 @@ def process_username_step(bot, message, telegram_id):
             f"مثال: `Pass1234`",
             parse_mode="Markdown"
         )
-
         bot.register_next_step_handler_by_chat_id(
             message.chat.id,
             lambda msg: process_password_step(bot, msg, telegram_id, username)
         )
 
     except Exception as e:
-        print("ERROR:", e)
-        bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}\nيرجى المحاولة مرة أخرى باستخدام /start")
+        logger.error(f"Error generating username: {str(e)}")
+        bot.send_message(
+            message.chat.id,
+            f"❌ خطأ: {str(e)}\n\nيرجى المحاولة مرة أخرى باستخدام /start"
+        )
 
 
 def process_password_step(bot, message, telegram_id, username):
@@ -110,57 +114,34 @@ def process_password_step(bot, message, telegram_id, username):
         return
 
     try:
-        api = ensure_session()
-        email = f"{username.lower()}@player.ichancy.com"
-
-        # التحقق النهائي قبل الإنشاء
-        if api.check_player_exists(username):
-            bot.send_message(message.chat.id, "❌ هذا الاسم مستخدم بالفعل، يرجى اختيار اسم آخر")
-            return
-
-        status, data, player_id, email_created = api.create_player_with_credentials(username, password)
-
+        status, data = api.create_player(login=username, password=password)
         if status != 200:
-            error_msg = "فشل إنشاء الحساب"
-            if data and isinstance(data, dict):
-                notifications = data.get("notification", [])
-                if notifications and isinstance(notifications, list) and notifications:
-                    error_msg = notifications[0].get("content", error_msg)
-            raise ValueError(error_msg)
-
-        if not player_id:
-            raise ValueError("لم يتم إنشاء معرف اللاعب")
+            raise ValueError(f"فشل إنشاء الحساب: {data}")
 
         # تحديث قاعدة البيانات
-        db.update_player_info(telegram_id, player_id, username, email_created or email, password)
+        email = f"{username}@agent.nsp"
+        db.update_player_info(telegram_id, username=username, email=email, password=password)
 
         login_info = f"""
 ✅ **تم إنشاء الحساب بنجاح!**
 
 👤 **اسم المستخدم:** `{username}`
 🔐 **كلمة المرور:** `{password}`
-📧 **البريد الإلكتروني:** `{email_created or email}`
-🆔 **معرف اللاعب:** `{player_id}`
+📧 **البريد الإلكتروني:** `{email}`
 
 🔗 **رابط تسجيل الدخول:**
 https://www.ichancy.com/login
-
-📌 **مهم:**
-1. استخدم نفس بيانات الدخول أعلاه
-2. إذا لم تعمل، جرب تغيير كلمة المرور أول مرة
-3. للتأكد، يمكنك استخدام "نسيت كلمة المرور" على الموقع
 
 ⚠️ **احفظ هذه البيانات في مكان آمن!**
         """
 
         bot.send_message(message.chat.id, login_info, parse_mode="Markdown")
+        logger.info(f"Player created: {username}")
 
     except Exception as e:
-        print("ERROR:", e)
+        logger.error(f"Error creating player: {str(e)}")
         bot.send_message(
             message.chat.id,
-            f"❌ **فشل إنشاء الحساب:**\n\n{str(e)}\n\n"
-            f"يرجى المحاولة مرة أخرى لاحقاً أو التواصل مع الدعم.",
+            f"❌ **فشل إنشاء الحساب:**\n\n{str(e)}\n\nيرجى المحاولة مرة أخرى لاحقاً أو التواصل مع الدعم.",
             parse_mode="Markdown"
         )
-
