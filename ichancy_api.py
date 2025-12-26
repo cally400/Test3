@@ -1,3 +1,4 @@
+# ichancy_api.py
 import cloudscraper
 import os
 import logging
@@ -59,6 +60,7 @@ class IChancyAPI:
         self.ENDPOINTS = {
             "signin": "/global/api/User/signIn",
             "create": "/global/api/Player/registerPlayer",
+            "check_player": "/global/api/Player/checkPlayerExist",
             "statistics": "/global/api/Statistics/getPlayersStatisticsPro",
             "deposit": "/global/api/Player/depositToPlayer",
             "withdraw": "/global/api/Player/withdrawFromPlayer",
@@ -242,6 +244,24 @@ class IChancyAPI:
         )
 
         return r.status_code, r.json()
+
+    @with_retry
+    def check_player_exists(self, login):
+        """
+        تحقق مما إذا كان اسم المستخدم موجود مسبقًا
+        """
+        payload = {"login": login}
+        r = self.scraper.post(
+            self.ORIGIN + self.ENDPOINTS["check_player"],
+            json=payload,
+            headers=self._headers(),
+            timeout=self.REQUEST_TIMEOUT,
+        )
+        if r.status_code != 200:
+            raise Exception(f"HTTP {r.status_code} عند التحقق من اسم المستخدم")
+
+        data = r.json()
+        return data.get("result", {}).get("exists", False)
 
     @with_retry
     def deposit(self, player_id, amount):
