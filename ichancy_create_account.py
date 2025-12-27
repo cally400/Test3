@@ -1,11 +1,12 @@
-# ichancy_create_account.py
+# ichancy_create_account.py - الإصدار المعدل
 import os
 import random
 import string
 import db
-from ichancy_api import IChancyAPI
+from ichancy_api import get_api_instance  # ⚠️ تغيير الاستيراد
 
-api = IChancyAPI()
+# ⚠️ استخدام النسخة المشتركة من API
+api = get_api_instance()
 
 def _random_suffix(length=3):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
@@ -13,15 +14,31 @@ def _random_suffix(length=3):
 def generate_username(raw_username: str) -> str:
     """إنشاء اسم مستخدم فريد"""
     base = f"ZEUS_{raw_username}"
+    
+    # المحاولة 1-6: أسماء منظمة
     for i in range(6):
         username = base if i == 0 else f"{base}_{_random_suffix()}"
         try:
-            if not api.check_player_exists(username):
+            exists = api.check_player_exists(username)
+            if not exists:
+                return username
+        except Exception as e:
+            # ⚠️ تسجيل الخطأ ومتابعة المحاولة
+            print(f"⚠️ خطأ في التحقق من {username}: {e}")
+            continue
+    
+    # المحاولة 7-12: أسماء عشوائية أكثر
+    for i in range(6):
+        username = f"ZEUS_{raw_username}_{_random_suffix(6)}"
+        try:
+            exists = api.check_player_exists(username)
+            if not exists:
                 return username
         except Exception:
-            # إذا فشل التحقق، نحاول اسم آخر
             continue
-    raise ValueError("❌ اسم المستخدم غير متاح، جرّب اسمًا آخر")
+    
+    # ⚠️ إذا فشلت جميع المحاولات، أنشئ اسم عشوائي بدون تحقق
+    return f"ZEUS_{raw_username}_{_random_suffix(8)}"
 
 def start_create_account(bot, call):
     bot.send_message(call.message.chat.id, "📝 أرسل اسم المستخدم المطلوب (بالإنجليزية فقط، بدون مسافات):")
@@ -79,12 +96,14 @@ def process_password_step(bot, message, telegram_id, username):
         email = f"{username.lower()}@player.ichancy.com"
 
         # تحقق أولاً إذا كان الحساب موجود بالفعل
-        if api.check_player_exists(username):
+        # ⚠️ يمكنك تعليق هذا السطر مؤقتاً للاختبار إذا كان check_player_exists يعطي خطأ
+        exists = api.check_player_exists(username)
+        if exists:
             bot.send_message(message.chat.id, "❌ هذا الاسم مستخدم بالفعل، يرجى اختيار اسم آخر")
             return
 
         # إنشاء الحساب
-        status, data = api.create_player(username, password)
+        status, data, player_id = api.create_player(username, password)  # ⚠️ التأكد من أن create_player تُرجع 3 قيم
 
         if status != 200:
             error_msg = "فشل إنشاء الحساب"
@@ -94,9 +113,11 @@ def process_password_step(bot, message, telegram_id, username):
                     error_msg = notifications[0].get("content", error_msg)
             raise ValueError(error_msg)
 
-        player_id = data.get("result", {}).get("playerId")
         if not player_id:
-            raise ValueError("لم يتم إنشاء معرف اللاعب")
+            # ⚠️ محاولة الحصول على player_id يدوياً إذا لم يُرجع
+            player_id = api.get_player_id(username)
+            if not player_id:
+                raise ValueError("لم يتم إنشاء معرف اللاعب")
 
         # حفظ البيانات في قاعدة البيانات
         db.update_player_info(telegram_id, player_id, username, email, password)
@@ -141,4 +162,3 @@ https://www.ichancy.com/login
             f"يرجى المحاولة مرة أخرى لاحقاً أو التواصل مع الدعم.",
             parse_mode="Markdown"
         )
-
