@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+# Dockerfile - متوافق مع Debian 12
+FROM python:3.11-slim-bullseye  # تغيير إلى bullseye
 
 # تثبيت تبعيات النظام
 RUN apt-get update && apt-get install -y \
@@ -21,18 +22,11 @@ RUN apt-get update && apt-get install -y \
     libxdamage1 \
     libxrandr2 \
     xdg-utils \
-    libgbm-dev \
-    libxshmfence-dev \
+    libgbm1 \
+    libxshmfence1 \
+    libxtst6 \
+    libxss1 \
     && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-# نسخ ملفات المشروع
-COPY requirements.txt .
-COPY . .
-
-# تثبيت بايثون dependencies
-RUN pip install --no-cache-dir -r requirements.txt
 
 # تثبيت Chrome
 RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
@@ -48,13 +42,19 @@ RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/120.0.6099.
     && chmod +x /usr/local/bin/chromedriver \
     && rm -rf chromedriver-linux64.zip chromedriver-linux64
 
-# إنشاء مستخدم غير root
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
-USER appuser
+WORKDIR /app
+
+COPY requirements.txt .
+COPY . .
+
+# تثبيت dependencies بايثون
+RUN pip install --no-cache-dir -r requirements.txt
 
 # تعيين متغيرات البيئة
-ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
 ENV CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
+ENV GOOGLE_CHROME_BIN=/usr/bin/google-chrome
+ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "bot.py"]
+# تشغيل التطبيق
+CMD ["python", "main.py"]
