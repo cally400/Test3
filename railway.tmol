@@ -1,0 +1,27 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "./Dockerfile"
+watchPatterns = ["*.py", "requirements.txt", "Dockerfile", "*.toml"]
+
+[deploy]
+startCommand = "python main.py"
+healthcheckPath = "/health"
+healthcheckTimeout = 60
+
+[build.args]
+PYTHON_VERSION = "3.11"
+
+[env]
+PYTHONUNBUFFERED = "1"
+PORT = "3000"
+HEADLESS = "true"
+
+[variables]
+HEADLESS = "true"
+PORT = "3000"
+PYTHONUNBUFFERED = "1"
+
+# إعدادات Chrome للـ Selenium
+CHROMEDRIVER_PATH = "/usr/local/bin/chromedriver"
+GOOGLE_CHROME_BIN = "/usr/bin/google-chrome"
+CHROME_VERSION = "120"
